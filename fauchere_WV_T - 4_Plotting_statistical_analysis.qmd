@@ -1,0 +1,1949 @@
+---
+title: "fauchere_WV_T - 4_Plotting_statistical_analysis"
+format: html
+editor: visual
+---
+
+
+```{r run to clean global Environment }
+rm(list = ls() )
+gc()
+
+```
+
+```{r Loading libraries and files paths}
+pacman::p_load(ggpubr, ggthemes, ggplot2, gridExtra, RColorBrewer, readxl, extrafont, ggrepel, rstatix, showtext, lubridate, scales, gtools, tidyverse, dplyr, svglite, DescTools, ggbeeswarm, ggpmisc, ComplexHeatmap, effectsize)
+
+
+# dir.create(output_dir_tables)
+#Loading fonts from the computer: Use your file path
+wd <- paste0(here::here(), "/")
+wd_R <- here::here() %>% str_replace("/[^/]*$", "/")
+
+
+#Loading fonts from the computer: Use your file path
+font_add(family="Arial", regular="C:\\Windows\\Fonts\\Arial\\arial.ttf") #Load Arial
+font_add(family="Times", regular="C:\\Windows\\Fonts\\Time New Roman\\times.ttf") #Load Times
+showtext_auto()
+
+filepath_plots <- paste0(wd, "\\Plots\\Stats\\")
+dir.create(filepath_plots, showWarnings=F)
+
+filepath_tables <- paste0(wd, "\\tables_out\\Stats\\")
+dir.create(filepath_tables, showWarnings=F)
+
+date <- gsub('[-]', '', Sys.Date()) #date of the day
+
+#sourcing code
+source(paste0(wd_R, "Source_code\\r_files\\ggplot_themes.R"))
+source(paste0(wd_R, "Source_code\\r_files\\r_functions.R"))
+
+col_heat <- circlize::colorRamp2(
+  c(-1, 0, 1),
+  c("red", "black", "green")
+)
+
+
+```
+
+##### Functions
+
+```{r function ggplot boxplot}
+#####
+#make plot function
+fn_plot <- function(data, y, y_label, y_breaks =  waiver(), y_trans = "identity", 
+                    y_log10 = FALSE, y_limits = c(0, NA), y_expension = .05,
+                    facet_expr = NULL, stat = NULL){
+  
+  p <-  data %>% 
+    ggplot(aes(x = timepoint, y = {{y}}, col = group)) +
+    geom_boxplot(outlier.shape=NA, width =0.5, position = position_dodge(width = 0.6))+
+    geom_line(aes(group = donor), alpha = .5) +
+    # geom_quasirandom(method = "quasirandom", width=.4, size=2, alpha = 0.6, varwidth=T, dodge.width=.25, shape = 21, aes(group = factor(donor), col = group, fill = group)) +
+  geom_beeswarm(aes(col = group, fill = group), groupOnX = TRUE, size = 2.5, alpha = 0.6, 
+                shape = 21, cex = 3, priority = "density"
+  ) +
+    
+    scale_color_manual(values = c("Non-allergic" = "#000000" , "Allergic" = "#D55E00")) +
+    scale_fill_manual(values = c("Non-allergic" = "#000000" , "Allergic" = "#D55E00")) +    
+    coord_cartesian(clip = "off") +
+    labs(x = NULL, col = "Cohort", x = "Time point", y = y_label)
+    
+    #facet_wrap
+  if (!is.null(facet_expr)) {
+    p <- p + facet_expr
+  }
+    #add p-values
+if (!is.null(stat)) {
+  p <- p +
+    geom_label(
+      data = stat,
+      aes(
+        x = (xmin + xmax) / 2,
+        y = y.position,
+        label = "p.adj"
+          ),
+      fill = "white",
+      alpha = 0.5,
+      color = "white",
+      label.size = 0
+    ) +
+  stat_pvalue_manual(
+      stat,
+      label = "p.adj",
+      tip.length = 0.015
+    ) 
+}
+  
+    #add custom y scale
+  if (y_log10 == TRUE) {
+    p <- p + scale_y_continuous(trans = pseudo_log_trans(base = 10), breaks = y_breaks, limits = y_limits, expand = expansion(mult = c(0.05, y_expension)))
+    
+    } else {
+      
+   p <- p + scale_y_continuous(transform = y_trans, breaks = y_breaks, limits = y_limits, expand = expansion(mult = c(0.05, y_expension)))
+    }
+        
+  #add themes
+  p + theme_pubr(legend = "top") + theme_x_angled + theme_fonts + theme_facet + theme_grid + theme(legend.position = "none")
+}  
+
+
+```
+
+```{r function ggplot corr }
+#####
+#make plot function
+fn_plot_cor <- function(data, x, x_label, y, y_label ,y_limits = c(NA, NA), y_breaks = NULL, y_trans = NULL, facet_expr = NULL){
+  
+  p <-  data %>% 
+    ggplot(aes(x = {{x}}, y = {{y}}, col = timepoint)) +
+    geom_point() +
+    geom_smooth(method = "lm", se = F) +
+    stat_cor(method = "spearman", label.y.npc = .98, p.accuracy = 0.001) +
+    scale_y_continuous(trans = pseudo_log_trans(base = 10), 
+                     breaks = c(0, 1, 10, 100, 1000), limits = y_limits) +
+    scale_color_manual(values = c("d0" = "#009E73","d7" = "#0072B2" , "mo6" = "#CC79A7")) +
+    coord_cartesian(clip = "off") +
+    labs(col = "Time point", x = x_label, y = y_label, title = NULL, subtitle = NULL)
+    
+    #facet_wrap
+  if (!is.null(facet_expr)) {
+    p <- p + facet_expr
+  }
+  
+      #add custom y breaks
+  if (!is.null(y_breaks) && is.null(y_trans)) {
+    p <- p + scale_y_continuous(breaks = y_breaks, limits = y_limits)
+  } 
+  
+  if(!is.null(y_trans)){
+    if (y_trans == "log10" && is.null(y_breaks)) {
+    p <- p + scale_y_continuous(trans = pseudo_log_trans(base = 10), limits = y_limits)
+    }
+  
+    if (y_trans == "log10" && !is.null(y_breaks)) {
+    p <- p + scale_y_continuous(trans = pseudo_log_trans(base = 10), breaks = y_breaks, limits = y_limits)
+    } 
+  }
+
+        
+  #add themes
+  p + theme_pubr(legend = "top") + theme_x_angled + theme_fonts + theme_facet + theme_grid +
+  theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+}  
+```
+
+```{r function for corr heatmap}
+fn_corr <- function(x, y, timepoint_column = NULL, timepoints = NULL) {
+  
+  fn <- function(x, y) {
+    #Inner function calculate correlation and return Rho, P values, and Stars
+    id_col_x <- names(x)[1]
+    id_col_y <- names(y)[1]
+    #Arrange the ids so that they match, and transform as matrix with ID to row names
+    x <- x %>% arrange(id_col_x) %>% column_to_rownames(id_col_x) %>% as.matrix()
+    y <- y %>% arrange(id_col_y) %>% column_to_rownames(id_col_y) %>% as.matrix()
+    #Create matrixes to store Rho, P, and Stars
+    rho <- matrix(
+      NA_real_,
+      nrow = ncol(x),
+      ncol = ncol(y),
+      dimnames = list(colnames(x), colnames(y))
+    )
+    p <- matrix(
+      NA_real_,
+      nrow = ncol(x),
+      ncol = ncol(y),
+      dimnames = list(colnames(x), colnames(y))
+    )
+    stars <- matrix(
+      "",
+      nrow = ncol(x),
+      ncol = ncol(y),
+      dimnames = list(colnames(x), colnames(y))
+    )
+    
+    #Compute correlation in two for loops (one to seq through columns, the other one through rows)
+    for (i in seq_len(ncol(x))) {
+      for (j in seq_len(ncol(y))) {
+        idx <- complete.cases(x[, i], y[, j])
+        if (sum(idx) >= 3) {
+          ct <- cor.test(
+            x[idx, i],
+            y[idx, j],
+            method = "spearman",
+            exact = FALSE
+          )
+          rho[i, j] <- unname(ct$estimate)
+          p[i, j] <- ct$p.value
+          
+          # Assign stars based on p-value
+          if (p[i, j] < 0.001) {
+            stars[i, j] <- "***"
+          } else if (p[i, j] < 0.01) {
+            stars[i, j] <- "**"
+          } else if (p[i, j] < 0.05) {
+            stars[i, j] <- "*"
+          } else if (p[i, j] < 0.1) {
+            stars[i, j] <- "."
+          }
+        }
+      }
+    }
+    
+    list(rho = rho, p = p, stars = stars)
+  }
+  
+  #outer function: Reorder matrices per variable and timepoint: 
+  #Var1 Time1-Time2-..., Var2 Time1-Time2-..., ...
+  if (is.null(timepoints)) {
+    fn(x, y)
+    
+  } else {
+    res <- lapply(timepoints, function(tp) {
+      y_tp <- y %>% dplyr::filter(.data[[timepoint_column]] == tp) %>% 
+        select(-all_of(timepoint_column))
+      fn(x, y_tp)
+    })
+    names(res) <- timepoints
+    
+    # Stack results by timepoint first
+    rho_combined <- do.call(rbind, lapply(res, function(x) x$rho))
+    p_combined <- do.call(rbind, lapply(res, function(x) x$p))
+    stars_combined <- do.call(rbind, lapply(res, function(x) x$stars))
+    
+    # Reorder to group by variable instead of timepoint
+    n_timepoints <- length(timepoints)
+    n_vars <- nrow(rho_combined) / n_timepoints
+    
+    t <- rep(1:n_vars, each = n_timepoints) + rep(0:(n_timepoints-1) * n_vars, times = n_vars)
+    
+    rho_combined <- rho_combined[t, ]
+    p_combined <- p_combined[t, ]
+    stars_combined <- stars_combined[t, ]
+    
+    # Create variable and timepoint labels for each row
+    variable_labels <- rep(rownames(res[[1]]$rho), each = n_timepoints)
+    timepoint_labels <- rep(timepoints, times = n_vars)
+    
+    # Return results as lists
+    list(
+      rho = rho_combined,
+      p = p_combined,
+      stars = stars_combined,
+      variable = variable_labels,
+      timepoint = timepoint_labels
+    )
+  }
+}
+
+
+```
+
+
+# Loading and merging data
+
+```{r preping data}
+
+#Load clinical data
+donor <- c("AH02", "H012", "H028", "H112", "H137", "H901", "H902", "H903", "H906", "H907", "H908", "H909", "H910", "H911")
+
+data <- read_xlsx(path = paste0(wd, "data\\in\\IgE_IgG4_SerumELISA.xlsx"), sheet = 3)
+data$`sIgG4 (i3 ) [mgA/L] Common wasp venom`
+data <- data %>% 
+  filter(id %in% donor) %>% 
+  mutate(visit = case_when(timepoint %in% c("d0", "d7") ~ "V1", timepoint == c("mo6") ~ "V2"),
+         day = case_when(timepoint %in% c("d0", "mo6") ~ "d0", timepoint == "d7" ~ "d7"),
+         Cohort = case_when(
+           Cohort == "Healthy Controls" ~ "Non-allergic", 
+           Cohort == "WaspVenom" ~ "Allergic"),
+         Cohort = factor(Cohort, levels = c("Non-allergic", "Allergic"))) %>% 
+  dplyr::rename(donor = "id",
+         group = "Cohort",
+         IgG4_Wasp = `sIgG4 (i3 ) [mgA/L] Common wasp venom`,
+         IgG4_VesV5 = `sIgG4 (i209 ) [mgA/L]    Ves v 5`,
+         IgG4_VesV1 = `sIgG4 (i211 ) [mgA/L]   Ves v 1`,
+         IgE_total = `tIgE`,
+         IgE_Wasp = `Wasp i3 IgE`,
+         IgE_VesV5 = `Ves v 5 IgE`,
+         IgE_VesV1 = `Ves v 1 IgE`) %>% 
+  mutate(
+    timepoint = case_when(
+      group == "Non-allergic" ~ "Non-allergic",
+      group == "Allergic" & visit == "V1" & day == "d0" ~ "d0",
+      group == "Allergic" & visit == "V1" & day == "d7" ~ "d7",
+      group == "Allergic" & visit == "V2" ~ "mo6"),
+    timepoint = factor(timepoint, levels = c("Non-allergic", "d0", "d7", "mo6"))) %>% 
+  select(donor, visit, day, timepoint, group, IgE_total, IgE_Wasp, IgE_VesV1, IgE_VesV5, IgG4_Wasp, IgG4_VesV1, IgG4_VesV5) %>% 
+  mutate(
+    across(IgE_total:IgG4_VesV5, as.numeric),
+    IgG4IgE_wasp = 10^(log10(IgG4_Wasp + 1) / log10(IgE_Wasp + 1)),
+    IgG4IgE_VesV1 = 10^(log10(IgG4_VesV1 + 1) / log10(IgE_VesV1 + 1)),
+    IgG4IgE_VesV5 = 10^(log10(IgG4_VesV5 + 1) / log10(IgE_VesV5 + 1))
+    ) 
+
+data_clini <- read_csv(paste0(wd, "data\\in\\FOODA2Control-RhinitisWaspHC_DATA_2026-04-29_0931.csv"))
+data_clini <- data_clini %>% 
+  rename(donor = study_id) %>% 
+  filter(donor %in% donor) %>% 
+  select(donor, age_in_years, gender, bmi, asth, ecz, chron_urti, insect_reaction, insect_score, insect_sev_score)
+
+data <- data %>% left_join(data_clini)
+
+#BAT data
+BAT_df <- read_csv("C:\\Users\\flore\\OneDrive - Charité - Universitätsmedizin Berlin\\BCRT\\Food@\\R\\FlowBAT_Git\\Tables\\Wasp\\Food@Basophils_EC50.csv") %>% 
+  filter(allergen == "wasp") %>% 
+  mutate(day = "d0") %>% 
+  select(donor, visit, day, fbat_cdmax, fbat_non_responder, fbat_auc, fbat_ec50_cd63, fbat_ec50_cd203c, fbat_ec50_mean) %>% 
+  distinct()
+
+data <- data %>% left_join(BAT_df)
+
+rm("data_clini", "BAT_df")
+
+
+#####
+#Data from flow cytometer to calculate % of scRNAseq clusters on frequency of total CD4 or CD8
+data_flow <- read_csv(paste0(wd, "data\\in\\Food@Wasp_Aurora.csv"), col_select = 1:4)
+colnames(data_flow)[1] <- "id"
+
+data_flow <- data_flow %>% 
+  filter(!id %in% c("Mean", "SD")) %>% 
+  mutate(id = str_sub(id, 21, -13)) %>% 
+  separate(id, into = c("date", "stimulation", "well", "donor", "visit", "day")) %>% 
+  select(-well) %>% arrange(donor, visit, day, stimulation) %>% 
+  filter(!donor == "H905") %>% 
+  group_by(donor, visit, day) %>% 
+  
+  #Make background substraction
+  mutate(activated_cd4 = activated_cd4 - activated_cd4[stimulation == "Unstim"],
+         treg_cd4 = treg_cd4 - treg_cd4[stimulation == "Unstim"],
+         activated_cd8 = activated_cd8 - activated_cd8[stimulation == "Unstim"]) %>% 
+  ungroup() %>% 
+  
+  #bind clinical data
+    left_join(data, by = c("donor", "visit", "day")) 
+
+
+#####
+#T cells scRNAseq
+T_Clusters <- read_csv(paste0(wd, "data\\out\\cluster_stat\\cluster_Tcells.csv")) %>% 
+  filter(!donor == "H905") %>% 
+  select(-1, -2) 
+
+#Recode clusters names
+names <- list(
+  `1` = "Treg act low",
+  `3` = "Treg act high",
+  
+  `2` = "Th2 no cytokines",
+  `5` = "Th2 classical",
+  `9` = "Th2 IL5+ IL3-",
+  `7` = "Th2 IL31+",
+  `6` = "Th2 Granzyme+",
+  
+  `10` = "CD4 XCL1+",
+  `11` = "CD4 IL2+",
+  `4` = "CD4 CCL20+ IL4l1+",
+  
+  `8` = "CD8 Granzyme+",
+  `12` = "low quality cells"
+)
+
+#One dataframe for percentage of clusters in unstulated samples
+T_Clusters_unstim <- T_Clusters %>% 
+  mutate(group = case_when(donor == "Unstim" ~ "Unstim", 
+                           donor %in% c("AH02", "H012", "H028", "H112", "H137") ~ "Non-allergic",
+                          .default = "Allergic")) %>% 
+    mutate(parent_pop = case_when(
+    clusters %in% c(2,4,5,6,7,9,10,11) ~ "Tcon",
+    clusters %in% c(1,3) ~ "Treg",
+    .default = NA
+    )) %>% 
+  group_by(donor, visit, day, parent_pop) %>% 
+  mutate(percent_of_parents = Freq / sum(Freq, na.rm = TRUE) * 100,
+         percent_of_parents = ifelse(clusters %in% c(8, 12), NA, percent_of_parents)) %>% 
+  ungroup() %>% 
+  mutate(clusters_names = recode(clusters, !!!names),
+         clusters_names = factor(clusters_names, levels = unlist(names)))
+  
+# Bind T cells scRNAseq with flow data
+T_Clusters <- data_flow %>% 
+  filter(stimulation == "Venom") %>% 
+  left_join(T_Clusters)
+
+
+
+T_Clusters <- T_Clusters %>% 
+  mutate(clusters_names = recode(clusters, !!!names),
+         clusters_names = factor(clusters_names, levels = unlist(names)))
+
+#Calculate percentage on CD4 or on CD8
+T_Clusters <- T_Clusters %>% 
+  group_by(donor, visit, day) %>% 
+  mutate(
+    percent = Freq * 100,
+    percent_of_CD4CD8 = case_when(
+      clusters %in% c(8) ~ Freq * activated_cd8,
+      clusters %in% c(1, 3) ~ Freq * treg_cd4,
+      clusters %in% c(2, 4:7, 9:12) ~ Freq * activated_cd4
+    )
+  ) %>% 
+  select(-Freq) %>% 
+  ungroup()
+
+
+#Add percentage normalised to parent population (Tcon clusters with Tcon, Treg with Tregs)
+T_clusters_parent <- T_Clusters %>% 
+  filter(!clusters %in% c(8, 12)) %>% 
+  mutate(parent_pop = case_when(
+    clusters %in% c(2,4,5,6,7,9,10,11) ~ "Tcon",
+    clusters %in% c(1,3) ~ "Treg",
+    .default = NA
+    )) %>% 
+  group_by(donor, timepoint, parent_pop) %>% 
+  mutate(percent_of_parents = percent / sum(percent, na.rm = TRUE) * 100) %>% 
+  ungroup() %>% 
+  filter(!clusters_names == "Treg act low") #as opposed to Treg act high
+
+#Calculate percentage of Tregs on all WV-specific T cells
+treg_df <- T_Clusters %>% 
+  select(donor, timepoint, clusters, percent) %>% 
+  pivot_wider(names_from = clusters, values_from = percent) %>% 
+  mutate(percent_of_parents = `1` + `3`) %>% 
+  select(donor, timepoint, percent_of_parents) %>% 
+  mutate(clusters_names = "Treg of WV-Tcells")
+
+order <- c("Treg of WV-Tcells", "Treg act high", "Th2 no cytokines", "Th2 classical", "Th2 IL5+ IL3-", "Th2 IL31+", "Th2 Granzyme+", "CD4 XCL1+", "CD4 IL2+", "CD4 CCL20+ IL4l1+")
+
+T_clusters_parent <- T_clusters_parent %>% bind_rows(treg_df) %>% 
+  arrange(donor, timepoint, clusters_names) %>% 
+  fill(everything(), .direction = "down") %>% 
+  mutate(clusters_names = factor(clusters_names, levels = order))
+
+
+#Add adt data to Tcells df
+adt_df <- read_csv(paste0(wd, "data\\out\\cluster_stat\\ADT_Tcells.csv")) %>% 
+  select(donor, visit, day, clusters_harmony, ADT, Expression) %>% 
+  pivot_wider(names_from = "ADT", values_from = "Expression", names_prefix = "ADT_") %>% 
+  rename(clusters = clusters_harmony) %>% 
+  mutate(clusters = as.numeric(clusters))
+
+T_Clusters <- T_Clusters %>% left_join(adt_df) 
+T_clusters_parent <- T_clusters_parent %>% left_join(adt_df)
+
+# Add exhaustion genes level to T cells df
+exhaust_df <- read_csv(paste0(wd, "data\\out\\cluster_stat\\cluster_Tcells_exhaustion_expression.csv"))
+T_Clusters <- T_Clusters %>% left_join(exhaust_df)
+
+
+rm("adt_df", "treg_df", "exhaust_df", "order", "names")
+
+```
+
+##### Donor table
+
+```{r donor table}
+library(report)
+df <- data %>% 
+  mutate(timepoint = recode(timepoint, "d0" = "Allergic d0", "d7" = "Allergic d7", "mo6" = "Allergic mo6"))
+
+df %>% 
+  # filter(timepoint %in% c("d0", "Non-allergic")) %>% 
+  group_by(timepoint) %>% 
+  summarise("n" =n(),
+            "Age [year]" = median(age_in_years),
+            "Male [prop]" = mean(gender),
+            "BMI" = median(bmi),
+            "IgE total" = median(IgE_total),
+            "IgE WV" = median(IgE_Wasp, na.rm = TRUE),
+            "IgE Ves v 1" = median(IgE_VesV1),
+            "IgE Ves v 5" = median(IgE_VesV5),
+            "IgG4 WV" = median(IgG4_Wasp),
+            "IgG4 Ves v 1" = median(IgG4_VesV1),
+            "IgG4 Ves v 5" = median(IgG4_VesV5)) %>% 
+  mutate(across(where(is.numeric), round, 2))
+  
+table_clini <- df %>% 
+  # filter(timepoint %in% c("d0", "Non-allergic")) %>% 
+  select(timepoint, gender, age_in_years, bmi, IgE_total, IgE_Wasp, IgE_VesV1, IgE_VesV5, IgG4_Wasp, IgG4_VesV1, IgG4_VesV5) %>% 
+  report::report_sample(by = "timepoint", centrality = "mean") %>% 
+  as.data.frame() 
+  
+table_clini[1,2:6] <- str_sub(table_clini[1,2:6], 0,-8) 
+variable_rename <- c(
+  "Male (prop)", "Age in year (mean, SD)", "BMI (mean, SD)", "Total IgE (mean, SD)", 
+   "Wasp venom sIgE (mean, SD)", "Ves v 1 sIgE (mean, SD)", "Ves v 5 sIgE (mean, SD)",
+   "Wasp venom sIgG4 (mean, SD)", "Ves v 1 sIgG4 (mean, SD)", "Ves v 5 sIgG4 (mean, SD)"
+)
+
+table_clini[,1] <- variable_rename
+table_clini
+
+```
+
+##### Clinical data
+
+```{r Titers}
+
+#Total IgE
+stat.test <- data %>% 
+  wilcox_test(IgE_total ~ timepoint, p.adjust.method = "BH", paired = TRUE,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = 1) %>% 
+    mutate(
+    p.adj = round(p.adj, 3),
+    y.position = y.position * .75) 
+  
+svglite(paste0(filepath_plots, "Titer_IgE_total.svg"), width = 3, height = 4.5)
+data %>% fn_plot(y = IgE_total, y_label = "Total IgE [kU/L]", y_log10 = TRUE, 
+                 y_breaks = c(0, 1, 10, 100, 1000), stat = stat.test)
+dev.off()
+
+# sIgE
+df <- data %>% 
+  pivot_longer(cols = IgE_Wasp:IgE_VesV5, names_to = "type", values_to = "titers") %>% 
+  mutate(
+    type = case_when(
+      type == "IgE_Wasp" ~ "Wasp", 
+      type == "IgE_VesV1" ~ "Ves v 1", 
+      type == "IgE_VesV5" ~ "Ves v 5"
+        ),
+    type = factor(type, levels = c("Wasp", "Ves v 1", "Ves v 5"))) 
+  
+stat.test <- df %>% 
+  group_by(type) %>% 
+  wilcox_test(titers ~ timepoint, paired = TRUE,  p.adjust.method = "BH", effect.size = T,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>%
+  add_xy_position(x = "timepoint", step.increase = .8) %>%   
+  ungroup() %>% 
+  mutate(
+    p.adj = round(p.adj, 3),
+    y.position = y.position * .75) 
+
+ 
+svglite(paste0(filepath_plots, "Titer_sIgE.svg"), width = 7.5, height = 4.5)
+df %>% fn_plot(y = titers, 
+               y_label = "IgE [kU/L]", 
+               y_log10 = TRUE, 
+               y_breaks = c(0, 1, 10, 100), 
+               stat = stat.test,
+               facet_expr = facet_wrap(~type)
+               )
+dev.off()
+
+# sIgG4
+df <- data %>% 
+  pivot_longer(cols = IgG4_Wasp:IgG4_VesV5, names_to = "type", values_to = "titers") %>% 
+  mutate(
+    type = case_when(
+      type == "IgG4_Wasp" ~ "Wasp", 
+      type == "IgG4_VesV1" ~ "Ves v 1", 
+      type == "IgG4_VesV5" ~ "Ves v 5"
+        ),
+    type = factor(type, levels = c("Wasp", "Ves v 1", "Ves v 5")))
+
+stat.test <- df %>% 
+  group_by(type) %>% 
+   wilcox_test(titers ~ timepoint, paired = TRUE,  p.adjust.method = "BH", 
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .25) %>%   
+  ungroup() %>% 
+ mutate(
+    p.adj = round(p.adj, 3),
+    y.position = y.position * .75) 
+
+svglite(paste0(filepath_plots, "Titer_sIgG4.svg"), width = 7.5, height = 4.5)
+df %>% 
+  fn_plot(y = titers, 
+          y_label = "IgG4 [mgA/L]", 
+          y_log10 = TRUE,  
+          y_breaks = c(0, 1, 5, 10, 20),
+          stat = stat.test, 
+          facet_expr = facet_wrap(~type)
+          )
+dev.off()
+
+
+# IgG4 / IgE
+df <- data %>% 
+  pivot_longer(cols = IgG4IgE_wasp:IgG4IgE_VesV5, names_to = "type", values_to = "titers") %>% 
+  mutate(titers = ifelse(titers > 10000, 2000, titers)) %>% 
+  mutate(
+    type = case_when(
+      type == "IgG4IgE_wasp" ~ "Wasp", 
+      type == "IgG4IgE_VesV1" ~ "Ves v 1", 
+      type == "IgG4IgE_VesV5" ~ "Ves v 5"
+        ),
+    type = factor(type, levels = c("Wasp", "Ves v 1", "Ves v 5")))
+
+stat.test <- df %>% 
+  group_by(type) %>% 
+   wilcox_test(titers ~ timepoint, paired = TRUE,  p.adjust.method = "BH", 
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>%
+  add_xy_position(x = "timepoint", step.increase = 1.5) %>%   
+  ungroup() %>% 
+  mutate(
+    p.adj = round(p.adj, 3),
+    y.position = y.position * .60) 
+  
+
+svglite(paste0(filepath_plots, "Titer_sIgG4_IgE.svg"), width = 7.5, height = 4.5)
+df %>% 
+  fn_plot(y = titers, 
+          y_label = "IgG4 / IgE",
+          y_log10 = TRUE, 
+          y_breaks = c(0, 1, 5, 10, 20, 100, 1000), 
+          stat = stat.test, 
+          facet_expr = facet_wrap(~type) 
+          )
+dev.off()
+
+df %>% filter(group=="Allergic", type=="Ves v 5") %>% 
+  ggplot(aes(x=timepoint, y=titers, col=donor)) +
+  geom_point() + 
+  scale_y_continuous(trans = pseudo_log_trans(base = 10))
+```
+
+```{r Basophil activation test}
+BAT <- data %>% filter(!timepoint == "d7", !is.na(fbat_cdmax), 
+                       !donor %in% c("H904","H905" , "H906", "H907", "H911")) %>% #filter out basophil non responders
+  mutate(timepoint = factor(timepoint, levels = c("Non-allergic", "d0", "mo6"))) %>% 
+  select(donor, timepoint, group, IgE_total,fbat_cdmax, fbat_non_responder, fbat_auc, fbat_ec50_cd63) %>% 
+  distinct()
+
+
+# Make plot one by one (different y axis)
+stat.test <- BAT %>% 
+  mutate(fbat_ec50_cd63 = log10(fbat_ec50_cd63)) %>% 
+  wilcox_test(fbat_ec50_cd63 ~ timepoint, paired = TRUE, p.adjust.method = "BH", 
+              comparisons = list(c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .04) %>% 
+  mutate(p.adj = round(p, 3), y.position = (10^y.position)*1.25) #to work with function plot
+
+svglite(paste0(filepath_plots, "BAT_EC50.svg"), width = 2.5, height = 4.5)
+BAT %>% fn_plot(y = fbat_ec50_cd63, 
+                y_label = "BAT EC50 [ng/ml]", 
+                y_log10 = TRUE,
+                y_breaks = c(0, 1, 10, 100, 1000, 10000), 
+                stat = stat.test
+                )
+dev.off()
+
+
+stat.test <- BAT %>% 
+  wilcox_test(fbat_auc ~ timepoint, paired = TRUE, p.adjust.method = "BH",
+              comparisons = list(c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .04) %>% 
+  mutate(p.adj = round(p, 3)) #to work with function plot
+
+svglite(paste0(filepath_plots, "BAT_AUC.svg"), width = 2.5, height = 4.5)
+BAT %>% fn_plot(y = fbat_auc, 
+                y_label = "BAT AUC", 
+                stat = stat.test
+                )
+dev.off()
+
+
+stat.test <- BAT %>% 
+  wilcox_test(fbat_cdmax ~ timepoint, paired = TRUE, p.adjust.method = "BH",
+              comparisons = list(c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .04) %>% 
+  mutate(p.adj = round(p, 3)) #to work with function plot
+
+
+svglite(paste0(filepath_plots, "BAT_CDMAX.svg"), width = 2.5, height = 4.5)
+BAT %>% fn_plot(y = fbat_cdmax, 
+                y_label = "BAT CDMAX [%]",  
+                stat = stat.test
+                )
+dev.off()
+
+```
+
+```{r T cells Flow cytometry}
+
+df <- data_flow %>% 
+  filter(!donor == "H905") %>% 
+  filter(stimulation == "Venom") %>% 
+  pivot_longer(cols = c(activated_cd4:activated_cd8), names_to = "Population", values_to = "percent_flow") %>% 
+  mutate(Population = recode(Population, "activated_cd4" = "WV specific Tconv", "activated_cd8" = "WV specific CD8 T cells", "treg_cd4" = "WV specific Treg")) 
+
+stat.test <- df %>% filter(!donor =="H905") %>% 
+  group_by(Population) %>% 
+  wilcox_test(percent_flow ~ timepoint, p.adjust.method = "BH", paired = TRUE,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .15, scales = "free_y") %>% 
+  mutate(p.adj = round(p.adj, 3))
+
+
+svglite(paste0(filepath_plots, "Flow_Tcells.svg"), width = 8, height = 4.5)
+df %>% fn_plot(y = percent_flow, 
+               y_label = "% of parents (background substracted)", 
+               y_limits = c(NA, NA),
+               stat = stat.test,  
+               facet_expr = facet_wrap(~Population, scales  = "free_y")
+               )
+dev.off()
+
+
+#####
+plot <- df %>% 
+  filter(timepoint == "d0") %>% 
+ 
+  ggplot(aes(x=percent_flow, y=IgE_VesV5)) +
+  facet_wrap(~Population, scales  = "free_x") +
+  geom_point(alpha = .5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  stat_cor(method = "spearman") +
+  scale_y_continuous(trans = pseudo_log_trans(base = 10), breaks = c(0,1,5,10,50,100), limits = c(NA, 180)) +
+  labs(x = "d0 % of parents (background substracted)", y = "d0 Ves v 5 sIgE") +
+  theme_pubr + theme_grid + theme_fonts + theme_facet + theme_x_angled
+
+svglite(paste0(filepath_plots, "Flow_Tcells_VesV5_corr.svg"), width = 7, height = 4)
+plot
+dev.off()
+
+
+# Correlation with IgG4/IgE at mo6
+df_2 <- df %>% 
+  filter(group == "Allergic") %>% 
+  group_by(donor, Population) %>% 
+   mutate(
+     IgG4_Wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+     IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+     IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+     IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"]) %>% 
+  filter(timepoint == "d0")
+
+plot <- df_2 %>%  
+  ggplot(aes(x=percent_flow, y=IgG4IgE_VesV5_mo6)) +
+  facet_wrap(~Population, scales  = "free_x") +
+  geom_point(alpha = .5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  stat_cor(method = "spearman") +
+  scale_y_continuous(trans = pseudo_log_trans(base = 10), breaks = c(1,5,10,50,100, 1000), limits = c(NA, 2000)) +
+  labs(x = "d0 % of parents (background substracted)", y = "mo6 Ves v 5 IgG4 / sIgE") +
+  theme_pubr + theme_grid + theme_fonts + theme_facet + theme_x_angled
+
+svglite(paste0(filepath_plots, "Flow_Tcells_IgG4IgE_VesV5_d0_corr.svg"), width = 7, height = 4)
+plot
+dev.off()
+
+plot <- df_2 %>%  
+  ggplot(aes(x=percent_flow, y=IgG4_VesV5_mo6)) +
+  facet_wrap(~Population, scales  = "free_x") +
+  geom_point(alpha = .5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  stat_cor(method = "spearman") +
+  scale_y_continuous(trans = pseudo_log_trans(base = 10), breaks = c(1,5,10,50,100, 1000), limits = c(NA, 10)) +
+  labs(x = "d0 % of parents (background substracted)", y = "mo6 Ves v 5 IgG4") +
+  theme_pubr + theme_grid + theme_fonts + theme_facet + theme_x_angled
+
+svglite(paste0(filepath_plots, "Flow_Tcells_IgG4_VesV5_d0_corr.svg"), width = 7, height = 4)
+plot
+dev.off()
+  
+```
+
+##### scRNAseq data
+
+```{r Seurat Cluster stats Non allergic vs Allergic at d0}
+#####
+# percentage of sequenced
+df <- T_Clusters %>% 
+  filter(timepoint %in% c("Non-allergic", "d0"))
+
+stat.test <- df %>%
+  group_by(clusters_names) %>% 
+  wilcox_test(percent ~ timepoint, p.adjust.method = "BH", paired = FALSE, comparisons = list(c("Non-allergic", "d0"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .10, scales  = "free") %>% 
+  mutate(p.adj = p) %>% 
+  ungroup() 
+
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Nonallergic_percent_sequenced.svg"), width = 9, height = 6)
+df %>% fn_plot(y = percent, 
+               y_label = "clusters [%]", 
+               stat = NULL,
+               facet_expr = facet_wrap(~clusters_names, scales = "free", nrow = 2,labeller = label_wrap_gen(width = 12))
+               )
+dev.off()
+
+
+#####
+# percentage of parents percent_of_CD4CD8
+stat.test <- df %>%
+  group_by(clusters_names) %>% 
+  wilcox_test(percent_of_CD4CD8 ~ timepoint, p.adjust.method = "BH", paired = FALSE, comparisons = list(c("Non-allergic", "d0"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .10, scales  = "free") %>% 
+  mutate(p.adj = p) %>% 
+  ungroup() 
+
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Nonallergic_percent_CD4CD8.svg"), width = 9, height = 6)
+df %>% fn_plot(y = percent_of_CD4CD8, 
+               y_label = "clusters [% of CD4/CD8]", 
+               stat = NULL,
+               facet_expr = facet_wrap(~clusters_names, scales = "free", nrow = 2,labeller = label_wrap_gen(width = 12))
+               )
+dev.off()
+
+#####
+# percentage of activated percent_of_parents
+df <- T_clusters_parent %>% 
+  filter(timepoint %in% c("Non-allergic", "d0"))
+
+stat.test <- df %>%
+  filter(!clusters %in% c(8, 12)) %>% 
+  group_by(clusters_names) %>% 
+  wilcox_test(percent_of_parents ~ timepoint, p.adjust.method = "BH", paired = FALSE, comparisons = list(c("Non-allergic", "d0"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .10, scales  = "free") %>% 
+  mutate(p.adj = p) %>% 
+  ungroup() 
+
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Nonallergic_percent_parents.svg"), width = 8, height = 6)
+df %>%   
+  filter(!clusters %in% c(8, 12)) %>% 
+  fn_plot(y = percent_of_parents, 
+          y_label = "Clusters [% of Tconv/Treg]", 
+          stat = NULL,
+          facet_expr = facet_wrap(~clusters_names, scales = "free", nrow = 2,labeller = label_wrap_gen(width = 12))
+          )
+
+dev.off()
+
+
+```
+
+```{r Seurat Cluster stats Allergic timepoints}
+#####
+# percentage of sequenced
+df <- T_Clusters %>% 
+  filter(!timepoint == "Non-allergic") %>% 
+  mutate(timepoint = factor(timepoint))
+
+stat.test <- df %>%
+  group_by(clusters_names) %>% 
+  wilcox_test(percent ~ timepoint, p.adjust.method = "BH", paired = TRUE,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .20, scales  = "free") %>% 
+  group_by(clusters_names) %>% 
+  mutate(y.position = case_when(
+    group2 == "mo6" ~ y.position[group2=="d7"]*1.08,
+    .default = y.position)) %>% 
+  ungroup() 
+
+
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Kinetic_percent_sequenced.svg"), width = 9, height = 6)
+df %>% fn_plot(y = percent, 
+               y_label = "clusters [%]", 
+               y_expension = .09,
+               stat = stat.test, 
+               facet_expr = facet_wrap(~clusters_names, scales = "free", nrow = 2,labeller = label_wrap_gen(width = 15))
+               )
+dev.off()
+
+
+#####
+# percentage of parents percent_of_CD4CD8
+df <- T_Clusters %>% 
+  filter(!timepoint == "Non-allergic") %>% 
+  mutate(timepoint = factor(timepoint))
+
+stat.test <- df %>%
+  group_by(clusters_names) %>% 
+  wilcox_test(percent_of_CD4CD8 ~ timepoint, p.adjust.method = "BH", paired = TRUE,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .20, scales  = "free") %>% 
+  group_by(clusters_names) %>% 
+  mutate(y.position = case_when(
+    group2 == "mo6" ~ y.position[group2=="d7"]*1.08,
+    .default = y.position)) %>% 
+  ungroup() 
+
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Kinetic_percent_CD4CD8.svg"), width = 9, height = 6)
+df %>% fn_plot(y = percent_of_CD4CD8, 
+               y_label = "clusters [% of CD4/CD8]", 
+               y_expension = .09,
+               stat = stat.test, 
+               facet_expr = facet_wrap(~clusters_names, scales = "free", nrow = 2,labeller = label_wrap_gen(width = 15))
+               )
+dev.off()
+
+#####
+# percentage of activated percent_of_parents
+df <- T_clusters_parent %>% 
+  filter(!timepoint == "Non-allergic") %>% 
+  mutate(timepoint = factor(timepoint))
+
+stat.test <- df %>%
+  filter(!clusters %in% c(8, 12)) %>%   
+  group_by(clusters_names) %>% 
+  wilcox_test(percent_of_parents ~ timepoint, p.adjust.method = "BH", paired = TRUE,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .20, scales  = "free") %>% 
+  group_by(clusters_names) %>% 
+  mutate(
+    p.adj = round(p.adj, 3),
+    y.position = case_when(
+    group2 == "mo6" ~ y.position[group2=="d7"]*1.12,
+    .default = y.position)) %>% 
+  ungroup() 
+
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Kinetic_percent_parents.svg"), width = 15, height = 7)
+df %>% 
+  filter(!clusters %in% c(8, 12)) %>% 
+  fn_plot(y = percent_of_parents, 
+          y_label = "Clusters [% of Tconv/Treg]", 
+          y_expension = .09,
+          stat = stat.test, 
+          facet_expr = facet_wrap(~clusters_names, scales = "free", nrow = 2,labeller = label_wrap_gen(width = 20))
+          ) 
+dev.off()
+
+```
+
+```{r Seurat Cluster stats Unstim }
+#####
+# percentage of sequenced
+svglite(paste0(filepath_plots, "Tcells_cluster_box_percent_UNSTIM.svg"), width = 8, height = 5)
+T_Clusters_unstim %>% 
+  filter(day == "d0", visit == "V1") %>% 
+  mutate(group = factor(group, levels = c("Unstim", "Non-allergic", "Allergic")),
+         Freq = Freq*100) %>% 
+  ggplot(aes(x = group, y = Freq, col = group)) +
+  facet_wrap(~clusters, scales = "free_y", nrow = 2) +
+  geom_boxplot(outlier.shape=NA, width =0.5, position = position_dodge(width = 0.6))+
+  geom_quasirandom(method = "quasirandom", width=.05, size=1, alpha = 0.6, varwidth=F, dodge.width=0.60) +
+  
+  scale_color_manual(values = c("Non-allergic" = "#000000" , "Allergic" = "#D55E00", "Unstim" = "cornflowerblue")) +
+  coord_cartesian(clip = "off") +
+  labs(x = NULL, y = "Clusters [% of sequenced]") + coord_cartesian(ylim = c(0, NA)) +
+  theme_pubr(legend = "top") + theme_x_angled + theme_fonts + theme_facet + theme_grid + theme(legend.position = "none") 
+dev.off()
+  
+
+colours <- brewer.pal(12, "Set3")
+colours <- colours[c(1, 3, 12, 10, 4, 7, 6, 2, 5, 8, 9, 11)]
+
+df <- T_Clusters_unstim %>% 
+  # filter(day == "d0", visit == "V1") %>% 
+  mutate(group = factor(group, levels = c(  "Allergic", "Non-allergic","Unstim")),
+         Freq = Freq*100,
+         clusters = paste0(clusters, ": ", clusters_names)) %>% 
+  group_by(group, clusters) %>% 
+  summarise(Freq = mean(Freq)) 
+
+clust_order <- df$clusters %>% unique()
+
+svglite(paste0(filepath_plots, "Tcells_cluster_bar_percent_UNSTIM.svg"), width = 8, height = 4)
+df %>% 
+  mutate(clusters = factor(clusters, levels = clust_order[c(4:12, 1:3)])) %>% 
+  ggplot(aes(x = group, y = Freq, fill = clusters)) +
+  facet_wrap(~clusters, scales = "free_x", nrow = 2, labeller = label_wrap_gen(width = 15)) +
+  geom_col() +
+  scale_fill_manual(values = colours) +  
+  labs(x = NULL, y = "Clusters [% of sequenced]") + coord_cartesian(ylim = c(0, NA)) +   coord_flip() +
+  theme_pubr(legend = "top") + theme_fonts + theme_facet + theme(legend.position = "none") + theme_x_angled
+dev.off()
+
+
+
+svglite(paste0(filepath_plots, "Tcells_cluster_circle_percent_UNSTIM.svg"), width = 2, height = 7)
+hsize <- 3
+T_Clusters_unstim %>% 
+  # filter(day == "d0", visit == "V1") %>% 
+  mutate(group = factor(group, levels = c(  "Allergic", "Non-allergic","Unstim")),
+         Freq = Freq*100,
+         clusters = as.factor(clusters)) %>% 
+  group_by(group, clusters) %>% 
+  summarise(Freq = mean(Freq)) %>% 
+  
+  ggplot(aes(x = hsize, y = Freq, fill = clusters, label = clusters)) +
+  facet_wrap(~group,  ncol = 1) +
+  geom_col() + 
+  coord_polar(theta = "y") + xlim(c(0.2, hsize + 0.5)) +
+  scale_fill_manual(values = colours) +    
+  
+  geom_text(aes(label = clusters), position = position_stack(vjust = 0.5), show.legend = FALSE) +
+  labs(x = NULL, y = "Clusters [% of sequenced]") + 
+  theme_fonts + theme_facet + theme(legend.position = "none") + theme_x_angled + theme_void() + theme(legend.position = "none")
+dev.off()
+
+  
+```
+
+
+##### Correlations with sIgE or sIgG4
+
+```{r Make corr heamap with IgE at d0}
+
+#Make dfs
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0")) %>% 
+  mutate(IgE_Wasp = log10(IgE_Wasp),
+         IgE_VesV1 = log10(IgE_VesV1),
+         IgE_VesV5 = log10(IgE_VesV5),
+         fbat_ec50_cd63 = 1/log10(fbat_ec50_cd63)
+         ) %>% 
+    select(donor, IgE_Wasp, IgE_VesV5, fbat_ec50_cd63)
+
+
+#####
+#Make heatmap on percent of seq
+df_corr_T <- T_Clusters %>% 
+  filter(timepoint %in% c("d0")) %>% 
+  select(donor, timepoint, clusters_names, percent) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent") 
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0"))
+
+#Rename rows
+rownames(mat_corr$rho)<- c("d0 Wasp sIgE", "d0 Ves v 5 sIgE", "d0 BAT 1 / EC50")
+stars <- mat_corr$stars #store stars
+
+#make colors for heatmap
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_d0_seq.svg"), width = 7, height = 3)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "d0 Clusters [%]", column_title_side = "top", name = "Spearman ρ",
+        cell_fun = cell_fun, col = col_heat, column_names_rot = 45
+        ) + annotation_timepoint
+dev.off()
+
+
+
+#Make heatmap on percent of parents
+df_corr_T <- T_clusters_parent %>% 
+  filter(timepoint %in% c("d0")) %>%  
+  select(donor, timepoint, clusters_names, percent_of_parents) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent_of_parents") 
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0"))
+
+#Rename rows
+rownames(mat_corr$rho)<- c("d0 Wasp sIgE", "d0 Ves v 5 sIgE", "d0 BAT 1 / EC50")
+stars <- mat_corr$stars #store stars
+
+svglite(paste0(filepath_plots, "corrheatmap_d0_parents.svg"), width = 7, height = 3)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "d0 Clusters [% of Tconv/Treg]", column_title_side = "top", name = "Spearman ρ",
+        cell_fun = cell_fun, col = col_heat, column_names_rot = 45
+        ) + annotation_timepoint 
+dev.off()
+
+
+svglite(paste0(filepath_plots, "corr_d0_selected_parents.svg"), width = 6.5, height = 3)
+T_clusters_parent %>% 
+  filter(
+    timepoint == "d0",
+    clusters_names %in% c("Th2 IL5+ IL3-", "Th2 Granzyme+", "Treg of WV-Tcells")
+    ) %>% 
+   fn_plot_cor(x = percent_of_parents, x_label = "d0 clusters [% of Tconv/Treg]", 
+              y = IgE_VesV5, y_label = "d0 Ves v 5 sIgE", y_trans = "log10",
+              y_limits = c(NA, 200), y_breaks = c(0, 1, 10, 100),
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", nrow = 1)) + theme(legend.position = "none")
+dev.off()
+
+svglite(paste0(filepath_plots, "corr_d0_supp_parents.svg"), width = 15, height = 3)
+T_clusters_parent %>% 
+  filter(
+    timepoint == "d0",
+    !clusters_names %in% c("Th2 IL5+ IL3-", "Th2 Granzyme+", "Treg of WV-Tcells")
+    ) %>% 
+   fn_plot_cor(x = percent_of_parents, x_label = "d0 clusters [% of Tconv/Treg]", 
+              y = IgE_VesV5, y_label = "d0 Ves v 5 sIgE", y_trans = "log10",
+              y_limits = c(NA, 200), y_breaks = c(0, 1, 10, 100),
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", nrow = 1)) + theme(legend.position = "none")
+dev.off()
+```
+
+```{r Make corr heamap with IgG4 at mo6}
+#make colors for heatmap
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor) %>%
+   mutate(IgG4_wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+         IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+         IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+         IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"],
+         fbat_ec50_cd63_diff_mo6 = (log10(fbat_ec50_cd63[timepoint == "mo6"]) / log10(fbat_ec50_cd63[timepoint == "d0"])),
+         IgG4IgE_wasp_mo6 = log10(IgG4IgE_wasp_mo6),
+         IgG4IgE_VesV5_mo6 = log10(IgG4IgE_VesV5_mo6)
+         ) %>% 
+  ungroup() %>% 
+  select(donor, IgG4_wasp_mo6, IgG4_VesV5_mo6) %>% 
+  distinct()
+         
+  
+#Make dfs
+T_clusters_plotdf <- T_Clusters %>% 
+  filter(timepoint %in% c("d0", "d7","mo6"),
+         !clusters_names %in% c("low quality cells", "CD8 Granzyme+")) %>% 
+  group_by(donor, clusters) %>% 
+  mutate(
+         percent_diff_seq = percent - percent[timepoint == "d0"],
+         percent_diff_cd4cd8 = percent_of_CD4CD8 - percent_of_CD4CD8[timepoint == "d0"]) %>% 
+  ungroup()
+
+#Make dfs
+T_clusters_plotdf_parents <- T_clusters_parent %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor, clusters) %>% 
+  mutate(percent_diff_parent = percent_of_parents - percent_of_parents[timepoint == "d0"]) %>% 
+  ungroup()
+
+
+#####
+#Make heatmap on percent of seq
+df_corr_T <- T_clusters_plotdf %>% 
+  select(donor, timepoint, clusters_names, percent) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent") 
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0", "d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho)[c(1, 3, 4, 6)] <- ""
+rownames(mat_corr$rho)[c(2, 5)] <- c("mo6 Wasp sIgG4", "mo6 Ves V 5 sIgG4")
+stars <- mat_corr$stars #store stars
+
+#Color for heatmap
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73","d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_perc_seq_IgG4.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [%]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+#Make heatmap on percent of parents
+df_corr_T <- T_clusters_plotdf_parents %>% 
+  select(donor, timepoint, clusters_names, percent_of_parents) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent_of_parents") 
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0", "d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho)[c(1, 3, 4, 6)] <- ""
+rownames(mat_corr$rho)[c(2, 5)] <- c("mo6 Wasp sIgG4", "mo6 Ves V 5 sIgG4")
+stars <- mat_corr$stars #store stars
+
+svglite(paste0(filepath_plots, "corrheatmap_perc_parents_IgG4.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [% of Tconv/Treg]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+
+#Make heatmap on Diff 
+df_corr_T <- T_clusters_plotdf %>% 
+  select(donor, timepoint, clusters_names, percent_diff_seq) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent_diff_seq") 
+
+mat_corr <- fn_corr(df_corr_clini, df_corr_T, timepoint_column = "timepoint", timepoints = c("d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho) <- rep(c("mo6 Wasp sIgG4", "mo6 Ves V 5 sIgG4"), each = 2)
+stars <- mat_corr$stars #store stars
+
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_diff_seq_IgG4.svg"), width = 7, height = 3.5)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [%, diff to d0]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 2), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+#Make heatmap on Diff of parents
+df_corr_T <- T_clusters_plotdf_parents %>% 
+  select(donor, timepoint, clusters_names, percent_of_parents) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent_of_parents") 
+
+mat_corr <- fn_corr(df_corr_clini, df_corr_T, timepoint_column = "timepoint", timepoints = c("d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho) <- rep(c("mo6 Wasp sIgG4", "mo6 Ves V 5 sIgG4"), each = 2)
+stars <- mat_corr$stars #store stars
+
+
+svglite(paste0(filepath_plots, "corrheatmap_diff_parent_IgG4.svg"), width = 7, height = 3.5)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [% of Tconv/Treg, diff to d0]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 2), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+```
+
+```{r Make corr heamap with IgG4/IgE at mo6}
+
+#Make dfs
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor) %>%
+   mutate(IgG4_wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+         IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+         IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+         IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"],
+         fbat_ec50_cd63_diff_mo6 = (log10(fbat_ec50_cd63[timepoint == "mo6"]) / log10(fbat_ec50_cd63[timepoint == "d0"])),
+         IgG4IgE_wasp_mo6 = log10(IgG4IgE_wasp_mo6),
+         IgG4IgE_VesV5_mo6 = log10(IgG4IgE_VesV5_mo6)
+         ) %>% 
+  ungroup() %>% 
+  select(donor, IgG4IgE_wasp_mo6, IgG4IgE_VesV5_mo6) %>% 
+  distinct()
+
+#Make dfs
+T_clusters_plotdf <- T_Clusters %>% 
+  filter(timepoint %in% c("d0", "d7","mo6"),
+         !clusters_names %in% c("low quality cells", "CD8 Granzyme+")) %>% 
+  group_by(donor, clusters) %>% 
+  mutate(
+         percent_diff_seq = percent - percent[timepoint == "d0"],
+         percent_diff_cd4cd8 = percent_of_CD4CD8 - percent_of_CD4CD8[timepoint == "d0"]) %>% 
+  ungroup()
+
+#Make dfs
+T_clusters_plotdf_parents <- T_clusters_parent %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor, clusters) %>% 
+  mutate(percent_diff_parent = percent_of_parents - percent_of_parents[timepoint == "d0"]) %>% 
+  ungroup()
+
+
+#####
+
+df_corr_T <- T_clusters_plotdf %>% 
+  select(donor, timepoint, clusters_names, percent) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent") 
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0", "d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho)[c(1, 3, 4, 6)] <- ""
+rownames(mat_corr$rho)[c(2, 5)] <- c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE")
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on percent of seq
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73","d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_perc_seq_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [%]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+
+#Make heatmap on percent of parents
+df_corr_T <- T_clusters_plotdf_parents %>% 
+  select(donor, timepoint, clusters_names, percent_of_parents) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent_of_parents") 
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0", "d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho)[c(1, 3, 4, 6)] <- ""
+rownames(mat_corr$rho)[c(2, 5)] <- c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE")
+stars <- mat_corr$stars #store stars
+
+svglite(paste0(filepath_plots, "corrheatmap_perc_parent_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [% of Tconv/Treg]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+
+df_corr_T <- T_clusters_plotdf %>% 
+  select(donor, timepoint, clusters_names, percent_diff_seq) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent_diff_seq") 
+
+mat_corr <- fn_corr(df_corr_clini, df_corr_T, timepoint_column = "timepoint", timepoints = c("d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho) <- rep(c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE"), each = 2)
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on Diff 
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_diff_seq_IgG4IgE.svg"), width = 7, height = 3.5)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [%, diff to d0]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 2), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+
+#Make heatmap on Diff of parents
+df_corr_T <- T_clusters_plotdf_parents %>% 
+  select(donor, timepoint, clusters_names, percent_diff_parent) %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "percent_diff_parent") 
+
+mat_corr <- fn_corr(df_corr_clini, df_corr_T, timepoint_column = "timepoint", timepoints = c("d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho) <- rep(c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE"), each = 2)
+stars <- mat_corr$stars #store stars
+
+
+svglite(paste0(filepath_plots, "corrheatmap_diff_parent_IgG4IgE.svg"), width = 7, height = 3.5)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Clusters [% of Tconv/Treg, diff to d0]", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 2), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+```
+
+```{r Seurat corr scatter with IgG4/IgE at mo6}
+
+####################
+# Correlation plot for selected clusters
+####################
+#Make dfs
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor) %>%
+   mutate(IgG4_wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+         IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+         IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+         IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"]
+         ) %>% 
+  ungroup() %>% 
+  select(donor, IgG4IgE_wasp_mo6, IgG4IgE_VesV5_mo6) %>% 
+  distinct()
+
+
+df_plot <- T_clusters_parent %>% 
+  filter(!clusters %in% c(8,12), #remove Tregs and clusters 8 and 12 from data
+         !timepoint == "Non-allergic"
+         ) %>% 
+  mutate(timepoint = factor(timepoint)) %>% 
+  group_by(donor, clusters) %>% 
+  mutate(percent_parents_diff = percent_of_parents - percent_of_parents[timepoint == "d0"]) %>% 
+  ungroup()
+
+
+svglite(paste0(filepath_plots, "corrplot_Cluster_parent_IgG4IgE_Selected.svg"), width = 6.5, height = 3.5)
+df_plot %>% 
+  left_join(df_corr_clini, by = "donor") %>% 
+  filter(timepoint %in% c("d0")) %>% 
+  filter(clusters_names %in% c("Th2 IL5+ IL3-", "Treg of WV-Tcells", "Th2 Granzyme+")) %>% 
+  fn_plot_cor(x = percent_of_parents, x_label = "Clusters [% of Tconv/Treg]", y_trans = "log10",
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 1800), y_breaks = c( 1, 10, 100, 1000, 3000), 
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", nrow = 1)) 
+dev.off()
+
+
+svglite(paste0(filepath_plots, "corrplot_Cluster_parent_IgG4IgE_supp.svg"), width = 14.5, height = 3.5)
+df_plot %>% 
+  left_join(df_corr_clini, by = "donor") %>% 
+  filter(timepoint %in% c("d0")) %>% 
+  filter(!clusters_names %in% c("Th2 IL5+ IL3-", "Treg of WV-Tcells", "Th2 Granzyme+")) %>% 
+  fn_plot_cor(x = percent_of_parents, x_label = "Clusters [% of Tconv/Treg]", y_trans = "log10",
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 4200), y_breaks = c( 1, 10, 100, 1000, 4000), 
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", nrow = 1)) 
+dev.off()
+
+
+svglite(paste0(filepath_plots, "corrplot_Cluster_parent_DIFF_IgG4IgE_Selected.svg"), width = 8, height = 3.5)
+df_plot %>% 
+  left_join(df_corr_clini, by = "donor") %>% 
+  filter(!timepoint %in% c("d0")) %>% 
+  filter(clusters_names %in% 
+           c("Th2 IL5+ IL3-", "Treg act high", "CD4 CCL20+ IL4l1+", "Treg of WV-Tcells")) %>% 
+  fn_plot_cor(x = percent_parents_diff, x_label = "Clusters diff to d0 [% of Tconv/Treg]", 
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 4300), y_breaks = c( 1, 10, 100, 1000, 10000), y_trans = "log10",
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", nrow = 1)) 
+dev.off()
+
+
+svglite(paste0(filepath_plots, "corrplot_Cluster_parent_DIFF_IgG4IgE_Supp.svg"), width = 14.5, height = 3.5)
+df_plot %>% 
+  left_join(df_corr_clini, by = "donor") %>% 
+  filter(!timepoint %in% c("d0")) %>% 
+  filter(!clusters_names %in% 
+           c("Th2 IL5+ IL3-", "Treg act high", "CD4 CCL20+ IL4l1+", "Treg of WV-Tcells")) %>% 
+  fn_plot_cor(x = percent_parents_diff, x_label = "Clusters diff to d0 [% of Tconv/Treg]", 
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 4200), y_breaks = c( 1, 10, 100, 1000, 4000), y_trans = "log10",
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", nrow = 1)) 
+dev.off()
+
+
+
+
+
+
+
+```
+
+
+##### CD3 and NOTCH2 MFI
+
+```{r Seurat Cluster adt }
+ADT_df <-  T_Clusters %>% 
+  filter(!clusters %in% c(8,12),
+         !timepoint == "Non-allergic"
+         ) %>% 
+  mutate(timepoint = factor(timepoint))
+
+plot_group <- ADT_df %>% 
+  pivot_longer(cols = c("ADT_CD3", "ADT_Notch2"), names_to = "Protein", values_to = "ADT") %>% 
+  fn_plot(y = ADT, 
+               y_label = "Protein relative expression", 
+               y_expension = .09,
+               stat = NULL, 
+               facet_expr = facet_grid(rows = vars(Protein), cols = vars(clusters_names), scales = "free", labeller = label_wrap_gen(width = 15))
+               )
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_ADT.svg"), width = 15, height = 8)
+plot_group
+dev.off()
+
+# Notch2 only
+stat.test <- ADT_df %>%
+  group_by(clusters_names) %>% 
+  wilcox_test(ADT_Notch2 ~ timepoint, p.adjust.method = "BH", paired = TRUE,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .16, scales  = "fixed") %>% 
+  mutate(p.adj = round(p.adj, 3),
+         p.adj = ifelse(p.adj < .001, "< .001", p.adj),
+         )
+
+plot_group <- ADT_df %>% 
+  fn_plot(y = ADT_Notch2, 
+               y_label = "Notch 2 protein [relative expression]", 
+               y_expension = .1,
+               stat = stat.test, 
+               facet_expr = facet_wrap(~clusters_names, scales = "fixed", labeller = label_wrap_gen(width = 20), nrow=2)
+               ) +
+  scale_y_continuous(limits = c(NA,1.70), breaks = c(.25, .5, .75, 1, 1.25, 1.5))
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_NOTCH2.svg"), width = 9, height = 6.5)
+plot_group
+dev.off()
+
+
+
+  
+```
+
+```{r Seurat ADT corr sIgE at d0 }
+df_plot <- T_Clusters %>% 
+  filter(!clusters %in% c(8,12), #remove Tregs and clusters 8 and 12 from data
+         timepoint == "d0"
+         ) %>% 
+  pivot_longer(cols = c("ADT_CD3", "ADT_Notch2"), names_to = "protein", values_to = "ADT")
+  
+
+#####
+#Cor heatmap
+#Make dfs
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0")) %>% 
+  mutate(IgE_Wasp = log10(IgE_Wasp),
+         IgE_VesV1 = log10(IgE_VesV1),
+         IgE_VesV5 = log10(IgE_VesV5),
+         fbat_ec50_cd63 = 1/log10(fbat_ec50_cd63)
+         ) %>% 
+  select(donor, IgE_Wasp, IgE_VesV5, fbat_ec50_cd63)
+
+#Make dfs
+T_clusters_plotdf <- df_plot
+
+
+#CD3
+df_corr_T <- T_clusters_plotdf %>% 
+  filter(protein=="ADT_CD3") %>% 
+  select(donor, timepoint, clusters_names, ADT) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "ADT")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0"))
+
+#Rename rows
+
+rownames(mat_corr$rho) <- c("d0 Wasp sIgE", "d0 Ves v 5", "d0 1/EC50 BAT")
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on percent of seq
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73"))) 
+
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "CD3 Protein expression", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+
+
+
+#Notch2
+df_corr_T <- T_clusters_plotdf %>% 
+  filter(protein=="ADT_Notch2") %>% 
+  select(donor, timepoint, clusters_names, ADT) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "ADT")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0"))
+
+#Rename rows
+rownames(mat_corr$rho) <- c("d0 Wasp sIgE", "d0 Ves v 5", "d0 1/EC50 BAT")
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on percent of seq
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73"))) 
+
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Notch2 Protein expression", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+
+
+
+```
+
+```{r Seurat ADT corr with IgG4/IgE }
+
+#####
+#Cor heatmap
+#Make dfs
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor) %>%
+   mutate(IgG4_wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+         IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+         IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+         IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"],
+         fbat_ec50_cd63_diff_mo6 = (log10(fbat_ec50_cd63[timepoint == "mo6"]) / log10(fbat_ec50_cd63[timepoint == "d0"])),
+         IgG4IgE_wasp_mo6 = log10(IgG4IgE_wasp_mo6),
+         IgG4IgE_VesV5_mo6 = log10(IgG4IgE_VesV5_mo6)
+         ) %>% 
+  ungroup() %>% 
+  select(donor, IgG4IgE_wasp_mo6, IgG4IgE_VesV5_mo6) %>% 
+  distinct()
+
+
+df_plot <- T_Clusters %>% 
+  filter(!clusters %in% c(8,12), #removeclusters 8 and 12 from data
+         timepoint %in% c("d0", "d7", "mo6")
+         ) %>% 
+  pivot_longer(cols = c("ADT_CD3", "ADT_Notch2"), names_to = "protein", values_to = "ADT")
+
+T_clusters_plotdf <- df_plot %>% 
+  group_by(donor, clusters, protein) %>% 
+  mutate(ADT_diff = ADT - ADT[timepoint == "d0"]) %>% 
+  ungroup() %>% 
+  distinct()
+
+
+
+#####  all timepoint
+#CD3
+df_corr_T <- T_clusters_plotdf %>% 
+  filter(protein=="ADT_CD3") %>% 
+  select(donor, timepoint, clusters_names, ADT) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "ADT")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0", "d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho)[c(1, 3, 4, 6)] <- ""
+rownames(mat_corr$rho)[c(2, 5)] <- c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE")
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on percent of seq
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73","d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_CD3_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "CD3 Protein expression", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+#Notch2
+df_corr_T <- T_clusters_plotdf %>% 
+  filter(protein=="ADT_Notch2") %>% 
+  select(donor, timepoint, clusters_names, ADT) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "ADT")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0", "d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho)[c(1, 3, 4, 6)] <- ""
+rownames(mat_corr$rho)[c(2, 5)] <- c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE")
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on percent of seq
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73","d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_NOTCH2_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Notch2 Protein expression", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+#####  diff
+#CD3
+df_corr_T <- T_clusters_plotdf %>% 
+  filter(protein == "ADT_CD3", !timepoint == "d0") %>% 
+  select(donor, timepoint, clusters_names, ADT_diff) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "ADT_diff")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho) <- rep(c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE"), each = 2)
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on Diff 
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_CD3_DIFF_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "CD3 protein expression diff to d0", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 2), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+#Notch2
+df_corr_T <- T_clusters_plotdf %>% 
+  filter(protein == "ADT_Notch2", !timepoint == "d0") %>% 
+  select(donor, timepoint, clusters_names, ADT_diff) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "ADT_diff")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho) <- rep(c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE"), each = 2)
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on Diff 
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_Notch2_DIFF_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Notch2 protein expression diff to d0", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 2), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor) %>%
+   mutate(IgG4_wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+         IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+         IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+         IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"],
+         fbat_ec50_cd63_diff_mo6 = (log10(fbat_ec50_cd63[timepoint == "mo6"]) / log10(fbat_ec50_cd63[timepoint == "d0"]))
+         ) %>% 
+  ungroup() %>% 
+  select(donor, IgG4IgE_wasp_mo6, IgG4IgE_VesV5_mo6) %>% 
+  distinct()
+
+
+svglite(paste0(filepath_plots, "corrplot_NOTCH2_IgG4IgE_Selected.svg"), width = 5, height = 3.5)
+T_clusters_plotdf %>% 
+  left_join(df_corr_clini %>% select(donor, IgG4IgE_VesV5_mo6)) %>% 
+  filter(protein == "ADT_Notch2", !timepoint == "d0") %>% 
+  filter(timepoint %in% c("d7", "mo6")) %>%
+  filter(clusters_names %in% c("Th2 IL5+ IL3-", "Th2 IL31+")) %>%
+  fn_plot_cor(x = ADT_diff, x_label = "NOTCH2 protein expression (diff from d0)", y_trans = "log10",
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 4200), y_breaks = c( 1, 10, 100, 1000, 4000), 
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", ncol = 3)) 
+dev.off()
+
+
+svglite(paste0(filepath_plots, "corrplot_NOTCH2_IgG4IgE_supp.svg"), width = 15, height = 3.5)
+T_clusters_plotdf %>% 
+  left_join(df_corr_clini %>% select(donor, IgG4IgE_VesV5_mo6)) %>% 
+  filter(protein == "ADT_Notch2", !timepoint == "d0") %>%   
+  filter(timepoint %in% c("d7", "mo6")) %>% 
+  filter(!clusters_names %in% c("Th2 IL5+ IL3-", "Th2 IL31+")) %>% 
+  fn_plot_cor(x = ADT_diff, x_label = "NOTCH2 protein expression (diff from d0)", y_trans = "log10",
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 4200), y_breaks = c( 1, 10, 100, 1000, 4000), 
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", nrow = 1)) 
+dev.off()
+```
+
+
+##### Gene Expression
+
+```{r Exhaustion }
+df_plot <- T_Clusters %>% 
+  filter(!clusters %in% c(1,3,8,12), #remove Tregs and clusters 8 and 12 from data
+         !timepoint == "Non-allergic"
+         ) %>% 
+  mutate(timepoint = factor(timepoint)) %>% 
+  pivot_longer(cols = c("PDCD1", "CTLA4", "LAG3", "TIGIT"), names_to = "Exhaust", values_to = "Expr")
+  
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Exhaust.svg"), width = 15, height = 7)
+df_plot %>% fn_plot(y = Expr, 
+               y_label = "Gene expression", 
+               y_expension = .09,
+               stat = NULL, 
+               facet_expr = facet_grid(rows = vars(Exhaust), cols = vars(clusters_names), scales = "free", labeller = label_wrap_gen(width = 20))
+               )
+dev.off()
+
+#scale and calculate exhaustion score
+df_plot_exhaust <- df_plot %>% 
+  group_by(Exhaust) %>% 
+  mutate(Expr = (Expr - min(Expr, na.rm = TRUE)) / (max(Expr, na.rm = TRUE) - min(Expr, na.rm = TRUE)) ) %>% 
+  group_by(donor, timepoint, clusters_names) %>% 
+  mutate(Exhaust_score = mean(Expr)) %>% 
+  ungroup()
+  
+# Verify than scalling worked
+df_plot_exhaust %>% fn_plot(y = Expr, 
+               y_label = "Gene expression", 
+               y_expension = .09,
+               stat = NULL, 
+               facet_expr = facet_grid(rows = vars(Exhaust), cols = vars(clusters_names), scales = "free", labeller = label_wrap_gen(width = 12))
+               )
+
+stat.test <- df_plot_exhaust %>%
+  group_by(clusters_names) %>% 
+  wilcox_test(Exhaust_score ~ timepoint, p.adjust.method = "BH", paired = TRUE,
+              comparisons = list(c("d0", "d7"), c("d0", "mo6"))) %>% 
+  add_xy_position(x = "timepoint", step.increase = .15, scales  = "fixed") %>% 
+  mutate(
+    p.adj = round(p.adj, 3),
+    p.adj = ifelse(p.adj < .001, "< .001", p.adj)
+    )
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_Exhaust_score.svg"), width = 9, height = 6.5)
+df_plot_exhaust %>% select(donor, timepoint, group, Exhaust_score,clusters_names) %>% distinct() %>% 
+  fn_plot(y = Exhaust_score, 
+               y_label = "Exhaustion score", 
+               y_expension = .08,
+               facet_expr = facet_wrap(~clusters_names, scales = "fixed", nrow = 2,labeller = label_wrap_gen(width = 20)),
+               stat = stat.test)
+dev.off()
+
+
+
+#######
+# HEATMAP vs IgG4/IgE
+#Make dfs
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor) %>%
+   mutate(IgG4_wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+         IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+         IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+         IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"],
+         fbat_ec50_cd63_diff_mo6 = (log10(fbat_ec50_cd63[timepoint == "mo6"]) / log10(fbat_ec50_cd63[timepoint == "d0"])),
+         IgG4IgE_wasp_mo6 = log10(IgG4IgE_wasp_mo6),
+         IgG4IgE_VesV5_mo6 = log10(IgG4IgE_VesV5_mo6)
+         ) %>% 
+  ungroup() %>% 
+  select(donor, IgG4IgE_wasp_mo6, IgG4IgE_VesV5_mo6) %>% 
+  distinct()
+
+#Make dfs
+T_clusters_plotdf <- df_plot_exhaust %>% 
+  group_by(donor, clusters) %>% 
+  mutate(exhaust_diff = Exhaust_score - Exhaust_score[timepoint == "d0"]) %>% 
+  ungroup() %>% 
+  select(donor, timepoint, clusters_names, Exhaust_score, exhaust_diff) %>% 
+  distinct()
+
+##### Exhaustion all timepoint
+df_corr_T <- T_clusters_plotdf %>% 
+  select(donor, timepoint, clusters_names, Exhaust_score) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "Exhaust_score")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d0", "d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho)[c(1, 3, 4, 6)] <- ""
+rownames(mat_corr$rho)[c(2, 5)] <- c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE")
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on percent of seq
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d0" = "#009E73","d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_Exhaust_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Exhaustion score", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 3), row_title = NULL, column_names_rot = 45,
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+
+##### Exhaustion diff
+df_corr_T <- T_clusters_plotdf %>% 
+  select(donor, timepoint, clusters_names, exhaust_diff) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = "clusters_names", values_from = "exhaust_diff")
+
+mat_corr <- fn_corr(df_corr_clini,df_corr_T, timepoint_column = "timepoint", timepoints = c("d7", "mo6"))
+
+#Rename rows
+rownames(mat_corr$rho) <- rep(c("mo6 Wasp sIgG4 / sIgE", "mo6 Ves v 5 sIgG4 / sIgE"), each = 2)
+stars <- mat_corr$stars #store stars
+
+#Make heatmap on Diff 
+annotation_timepoint <- rowAnnotation(Time = mat_corr$timepoint, 
+              col = list(Time = c("d7" = "#0072B2" , "mo6" = "#CC79A7"))) 
+
+svglite(paste0(filepath_plots, "corrheatmap_Exhaust_DIFF_IgG4IgE.svg"), width = 7, height = 4)
+Heatmap(mat_corr$rho, cluster_rows = F, cluster_columns = T, row_names_side = "left",
+        column_title = "Exhaustion score (diff to d0)", column_title_side = "top", name = "Spearman ρ",
+        row_split = ceiling(seq_len(nrow(mat_corr$rho)) / 2), row_title = NULL, column_names_rot = 45, 
+        cell_fun = cell_fun, col = col_heat
+        ) + annotation_timepoint
+dev.off()
+
+
+#######
+# Correlation plot for selected clusters
+
+#Make dfs
+df_corr_clini <- data %>% 
+  filter(timepoint %in% c("d0", "d7","mo6")) %>% 
+  group_by(donor) %>%
+   mutate(IgG4_wasp_mo6 = IgG4_Wasp[timepoint == "mo6"],
+         IgG4_VesV5_mo6 = IgG4_VesV5[timepoint == "mo6"],
+         IgG4IgE_wasp_mo6 = IgG4IgE_wasp[timepoint == "mo6"],
+         IgG4IgE_VesV5_mo6 = IgG4IgE_VesV5[timepoint == "mo6"]
+         ) %>% 
+  ungroup() %>% 
+  select(donor, IgG4IgE_wasp_mo6, IgG4IgE_VesV5_mo6) %>% 
+  distinct()
+
+
+svglite(paste0(filepath_plots, "corrplot_Exhaust_score_IgG4IgE_Selected.svg"), width = 5, height = 3.5)
+T_clusters_plotdf %>% 
+  left_join(df_corr_clini, by = "donor") %>% 
+  filter(
+    (timepoint=="mo6"&clusters_names=="Th2 IL5+ IL3-") |
+    (timepoint=="d7"&clusters_names=="CD4 IL2+")
+  ) %>% 
+  # filter(timepoint %in% c("d7", "mo6")) %>% 
+  # filter(clusters_names %in% c("Th2 IL5+ IL3-", "CD4 IL2+")) %>% 
+  fn_plot_cor(x = exhaust_diff, x_label = "Exhaustion score (diff to d0)", y_trans = "log10",
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 4200), y_breaks = c( 1, 10, 100, 1000, 4000), 
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", ncol = 2)) 
+dev.off()
+
+
+svglite(paste0(filepath_plots, "corrplot_Exhaust_score_IgG4IgE_Supp.svg"), width = 15, height = 3.5)
+T_clusters_plotdf %>% 
+  left_join(df_corr_clini, by = "donor") %>% 
+  filter(timepoint %in% c("d7", "mo6")) %>% 
+  filter(!clusters_names %in% c("Th2 IL5+ IL3-", "CD4 IL2+")) %>% 
+  fn_plot_cor(x = exhaust_diff, x_label = "Exhaustion score (diff to d0)", y_trans = "log10",
+              y = IgG4IgE_VesV5_mo6, y_label = "mo6 Ves v 5 sIgG4 / sIgE",
+              y_limits = c(NA, 4200), y_breaks = c( 1, 10, 100, 1000, 4000), 
+              facet_expr = facet_wrap(~clusters_names, scales = "free_x", ncol = 6)) 
+dev.off()
+
+```
+
+```{r In vivo activation }
+df_plot <- T_Clusters %>% 
+  filter(!clusters %in% c(8,12), #remove Tregs and clusters 8 and 12 from data
+         !timepoint == "Non-allergic"
+         ) %>% 
+  mutate(timepoint = factor(timepoint)) %>% 
+  pivot_longer(cols = c("MKI67", "CD38", "HLA-DRA"), names_to = "activation", values_to = "Expr")
+  
+
+svglite(paste0(filepath_plots, "Tcells_cluster_box_inVivoActivation.svg"), width = 15, height = 5)
+df_plot %>% fn_plot(y = Expr, 
+               y_label = "Gene expression", 
+               y_expension = .09,
+               stat = NULL, 
+               facet_expr = facet_grid(rows = vars(activation), cols = vars(clusters_names), scales = "free", labeller = label_wrap_gen(width = 20))
+               )
+dev.off()
+
+
+```
+
+

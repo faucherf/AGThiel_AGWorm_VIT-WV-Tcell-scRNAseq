@@ -1,0 +1,619 @@
+---
+title: "fauchere_WV_T - 2_Clustering_of_WV_Tcells.qmd"
+format: html
+editor: visual
+---
+
+```{r run to clean global Environment }
+rm(list = ls() )
+gc()
+
+```
+
+```{r Loading libraries and files paths}
+pacman::p_load(ggpubr, ggthemes, ggplot2, gridExtra, RColorBrewer, writexl, extrafont, ggrepel, rstatix, showtext, lubridate, scales, gtools, tidyverse, dplyr, svglite, DescTools, ggbeeswarm, ggpmisc)
+pacman::p_load(hdf5r, Seurat)
+
+#Loading fonts from the computer: Use your file path
+wd <- paste0(here::here(), "/")
+wd_R <- here::here() %>% str_replace("/[^/]*$", "/")
+
+
+#Loading fonts from the computer: Use your file path
+font_add(family="Arial", regular="C:\\Windows\\Fonts\\Arial\\arial.ttf") #Load Arial
+font_add(family="Times", regular="C:\\Windows\\Fonts\\Time New Roman\\times.ttf") #Load Times
+showtext_auto()
+
+filepath_plots <- paste0(wd, "\\Plots\\")
+dir.create(filepath_plots, showWarnings=F)
+
+date <- gsub('[-]', '', Sys.Date()) #date of the day
+
+#sourcing code
+source(paste0(wd_R, "Source_code\\r_files\\ggplot_themes.R"))
+source(paste0(wd_R, "Source_code\\r_files\\r_functions.R"))
+
+```
+
+
+```{r Seurat T cell - SCTransform, harmony and clustering}
+library(harmony) #batch correction
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_T.rds"))
+seurat_T <- SCTransform(seurat_T, assay = "RNA", verbose = TRUE, vars.to.regress = c("percent.mt"), return.only.var.genes = FALSE, min_cells = 0) #Transform RNA. Also Scale and find variable features
+
+#remove TCR, BCR, Mito and Ribosome from feature selection
+DefaultAssay(seurat_T) <- "SCT"
+VariableFeatures(seurat_T) <- setdiff(VariableFeatures(seurat_T),
+grep("^MT-|^RP[SL]|^TR[ABGD][VDJ]|^IG[HKL]",  VariableFeatures(seurat_T), value = TRUE) 
+)
+
+
+#Run UMAP on non corrected data
+seurat_T <- RunPCA(seurat_T, assay = "SCT", npcs = 50, reduction.name = "pca_unintegrated", features = VariableFeatures(seurat_T))
+ElbowPlot(seurat_T, reduction = "pca_unintegrated") #look at elbow curve and use it to rerun PCA: Always use more dims if unsure
+
+seurat_T <- seurat_T %>% 
+  RunPCA(npcs = 19, reduction.name = "pca_unintegrated", features = VariableFeatures(seurat_T)) %>% 
+  FindNeighbors(dims = 1:19, reduction = "pca_unintegrated") %>% 
+  FindClusters(resolution = .5, algorithm = 4, cluster.name = "clusters_unintegrated") %>% 
+  RunUMAP(dims = 1:19, reduction = "pca_unintegrated", reduction.name = "umap_unintegrated")
+DimPlot(seurat_T, reduction = "umap_unintegrated", group.by = c("batch", "clusters_unintegrated"))
+
+
+seurat_T <- seurat_T %>% 
+  RunHarmony(group.by.vars = "batch", reduction.use = "pca_unintegrated",  reduction.save = "pca_harmony", theta = 4) %>% 
+  RunUMAP(reduction = "pca_harmony", dims = 1:19, reduction.name = "umap_harmony") %>% 
+  FindNeighbors(reduction = "pca_harmony", dims = 1:19) %>% 
+  FindClusters(resolution = .5, algorithm = 4, cluster.name = "clusters_harmony")
+
+seurat_T %>% DimPlot(reduction = "umap_harmony", group.by = c("clusters_harmony"), label = TRUE) #check clustering
+
+
+svglite(filename = paste0(filepath_plots, "T_cells\\QC_Batch_Harmony.svg"), height = 8, width = 10)
+ggarrange(DimPlot(seurat_T, reduction = "umap_unintegrated", group.by = c("batch", "clusters_unintegrated"), pt.size = .2, shuffle = TRUE), 
+          DimPlot(seurat_T, reduction = "umap_harmony", group.by = c("batch", "clusters_harmony"), pt.size = .2, shuffle = TRUE), 
+          nrow = 2)
+dev.off()
+
+
+#QC only T cells
+FeaturePlot(seurat_T, reduction = "umap_harmony" ,features = c("CD14", "CD19", "MS4A1", "CD3E", "CD8A", "CD4"))
+VlnPlot(seurat_T, features = c("CD14", "CD19", "MS4A1", "CD3E", "CD8A", "CD4"))
+
+#Plot some marker to see distribution
+FeaturePlot(seurat_T, reduction = "umap_harmony" ,features = c("CD8A","IL4", "IL5", "IL13", "IFNG", "GATA3", "TBX21", "RORC", "FOXP3", "TNFRSF9", "CD40LG", "PTGDR2"))
+VlnPlot(seurat_T, features = c("CD8A","IL4", "IL5", "IL13", "IFNG", "GATA3", "TBX21", "RORC", "FOXP3", "TNFRSF9", "CD40LG", "PTGDR2"))
+
+#Plot PCA harmony info
+ElbowPlot(seurat_T, reduction = "pca_harmony")
+VizDimLoadings(seurat_T, dims = 1:4, reduction = "pca_unintegrated") #not computed for harmony
+DimPlot(seurat_T, reduction = "pca_harmony", dims = c(1,2) ,group.by = "group", alpha = 0.5, shuffle = TRUE) 
+DimPlot(seurat_T, reduction = "pca_harmony", dims = c(1,2) ,group.by = "batch", alpha = 0.5, shuffle = TRUE) 
+DimHeatmap(seurat_T, dims = c(1:18), reduction = "pca_harmony", cells = 500, balanced = TRUE)
+
+
+seurat_T <- PrepSCTFindMarkers(seurat_T) #prep SCT model
+SetIdent(seurat_T, value = "clusters_harmony")
+all(seurat_T@active.ident == seurat_T@meta.data[["clusters_harmony"]]) #check that the active ident is the harmony cluster
+
+# Save the seurat object
+saveRDS(seurat_T, file = paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds"))
+gc()
+```
+
+```{r Seurat ´- Cluster annotation manual}
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds"))
+
+#Make heatmap for clusters
+#remove TCR, BCR, Mito and Ribosome from feature selection
+T_markers <- FindAllMarkers(seurat_T, assay = "SCT", only.pos = TRUE, logfc.threshold = 0 ) #no threshold for GSEA
+gene_exclude <- grep("^MT-|^RP[SL]|^TR[ABGD][VDJ]|^IG[HKL]",  T_markers$gene, value = TRUE) 
+
+topgenes <- T_markers %>%
+    filter(!gene %in% gene_exclude) %>% 
+    group_by(cluster) %>%
+    dplyr::filter(avg_log2FC > 1) %>%
+    slice_head(n = 10) %>%
+    ungroup() 
+
+
+mean_expr <- AverageExpression(
+  seurat_T,
+  features = topgenes$gene,
+  group.by = "clusters_harmony",  # or any metadata column
+  layer = "data",                  # use "data" for log-normalized
+  assay = "SCT",
+  return.seurat = FALSE
+) %>% 
+  as.data.frame()
+colnames(mean_expr) <- paste0("Cluster_",1:12)
+
+write.csv(mean_expr, file =paste0(wd, "data\\out\\cluster_stat\\topgene_mean_Tcells.csv"))
+write.csv(T_markers, file =paste0(wd, "data\\out\\cluster_stat\\DEG_Tcells.csv"))
+
+# Make plots
+read_csv(paste0(wd, "data\\out\\cluster_stat\\topgene_mean_Tcells.csv"))
+clust_heatmap <- DoHeatmap(seurat_T, features = topgenes$gene) + NoLegend()
+png(filename = paste0(filepath_plots, "T_cells\\cluster_heatmap.png"), height = 1620, width = 2160)
+clust_heatmap
+dev.off()
+
+
+colours <- brewer.pal(12, "Set3")
+colours <- colours[c(1, 3, 12, 10, 4, 7, 6, 2, 5, 8, 9, 11)]
+#Clusters
+svglite(filename = paste0(filepath_plots, "T_cells\\cluster_umap.svg"), height = 4, width = 4.5)
+DimPlot(seurat_T, reduction = "umap_harmony", group.by = "clusters_harmony", label.size = 4, repel = F, label = TRUE, cols = colours) + 
+  labs(title = NULL, x = "UMAP", y = "UMAP") 
+dev.off()
+
+
+#Make plot by group: downsample first
+cells <- seurat_T@meta.data %>%
+  tibble::rownames_to_column("cell") %>%
+  group_by(group) %>%
+  slice_sample(n = 1500) %>%
+  pull(cell)
+
+svglite(filename = paste0(filepath_plots, "T_cells\\group_umap.svg"), height = 4.5, width = 4)
+DimPlot(seurat_T,  reduction = "umap_harmony", group.by = "group", cells = cells, shuffle = T, cols = c("#D55E00", "#000000", "cornflowerblue")) + 
+labs(title = NULL, x = "UMAP", y = "UMAP") + theme_pubr(legend = "top")
+dev.off()
+
+png(filename = paste0(filepath_plots, "T_cells\\marker_umap.png"), height = 1080, width = 1080)
+FeaturePlot(seurat_T, reduction = "umap_harmony" ,features = c("CD8A","IL4", "IL5", "IL13", "GATA3", "TBX21", "FOXP3","CCR7" ,"TNFRSF9", "CD40LG"))
+dev.off()
+
+png(filename = paste0(filepath_plots, "T_cells\\cluster_box.png"), height = 1080, width = 1080)
+VlnPlot(seurat_T, features = c("CD8A","IL4", "IL5", "IL13", "GATA3", "TBX21", "FOXP3","CCR7" ,"TNFRSF9", "CD40LG"))
+dev.off()
+
+
+#Export percentage per clusters
+cluster_table <- prop.table(table(seurat_T$clusters_harmony, seurat_T$sampleid), margin = 2) %>% 
+  t() %>% 
+  as.data.frame() %>% 
+  rename("sampleid" = "Var1", "clusters" = "Var2" ) %>% 
+  left_join(seurat_T@meta.data[,c("sampleid", "visit", "day")] %>% distinct(), by = "sampleid") %>% 
+  mutate(visit = case_when(str_detect(sampleid, "Unstim") ~ "V1", .default = visit),
+         day = case_when(str_detect(sampleid, "Unstim") ~ "d0", .default = day),
+         donor = str_extract(sampleid, "^[^_]+")
+         ) %>% 
+  select(sampleid, donor, visit, day, everything()) %>% 
+  arrange(donor, visit, day, clusters)
+
+write.csv(cluster_table, file =paste0(wd, "data\\out\\cluster_stat\\cluster_Tcells.csv"))
+
+rm(T_markers, topgenes, mean_expr, cluster_table)
+gc()
+
+
+
+# Dot plots - the size of the dot corresponds to the percentage of cells expressing the
+# feature in each cluster. The color represents the average expression level
+
+features = c("CD3E","CD4", "CD8A","TNFRSF9" , "CD40LG", "GZMB" ,"FOXP3", "LGALS3", "HLA-DPA1", "CTLA4", "PDCD1", "CCL20", "IL4I1","GATA3","IL4", "IL13", "IL5" , "IL3", "IL31", "IL2", "XCL1", "NFAT5")
+
+svglite(filename = paste0(filepath_plots, "T_cells\\Cluster_heat_dot.svg"), height = 4, width = 7.5)
+DotPlot(seurat_T, features = features, cluster.idents = T, dot.min = .4) + 
+  RotatedAxis() + labs(x=NULL, y = "Clusters") +  theme_pubr(legend = "right") + 
+  guides(color = guide_colorbar(title = "Expression")) + guides(size = guide_legend(title = "Percent")) +
+  theme_fonts + theme_grid + theme_x_angled 
+dev.off()
+
+svglite(filename = paste0(filepath_plots, "T_cells\\Cluster_heat_dot_names.svg"), height = 4, width = 8)
+DotPlot(seurat_T, features = features, cluster.idents = T, dot.min = .4) + 
+  RotatedAxis() + labs(x=NULL, y = "Clusters") +  theme_pubr(legend = "right") + 
+  guides(color = guide_colorbar(title = "Expression")) + guides(size = guide_legend(title = "Percent")) +
+  theme_fonts + theme_grid + theme_x_angled 
+dev.off()
+
+
+features = c("TNFRSF9" , "CD40LG", "GZMB" ,"FOXP3", "LGALS3", "HLA-DPA1", "CTLA4", "PDCD1","CCL20", "IL4I1","GATA3","IL4", "IL13", "IL5" , "IL3", "IL31", "IL2", "XCL1")
+png(filename = paste0(filepath_plots, "T_cells\\markers_umap.png"), height = 480, width = 1700)
+FeaturePlot(seurat_T, reduction = "umap_harmony" ,features = features, keep.scale = "all", ncol = 9 ) + 
+  patchwork::plot_layout(guides = "collect") & 
+  theme(axis.title = element_blank(), axis.text  = element_blank(), axis.ticks = element_blank())
+dev.off()
+
+
+features = c("IL5", "HPGDS")
+FeaturePlot(seurat_T, reduction = "umap_harmony" ,features = features, ncol = 2 ) +
+  theme(axis.title = element_blank(), axis.text  = element_blank(), axis.ticks = element_blank())
+
+
+#Plot timepoints in allergic
+seurat_T_subset <- seurat_T %>% 
+  subset(subset = group == "Allergic") %>% subset(subset = !donor == "H905")
+seurat_T_subset[["Timepoint"]] <- ifelse(seurat_T_subset[["visit"]] == "V2", "mo6", 
+                                         ifelse(seurat_T_subset[["visit"]] == "V1" & seurat_T_subset[["day"]] == "d0", "d0", "d7"))
+
+
+seurat_T_subset@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  group_by(Timepoint, donor) %>% 
+  count() %>% 
+  arrange(n)
+
+
+cells <- seurat_T_subset@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  group_by(Timepoint, donor) %>% 
+  slice_sample(n = 200) %>% 
+  pull(cell)
+
+seurat_T_subset %>% 
+  DimPlot(reduction = "umap_harmony", group.by = "Timepoint", cells = cells, shuffle = T, cols = c("#D55E00", "#000000", "cornflowerblue")) + 
+  labs(title = NULL, x = "UMAP", y = "UMAP") + theme_pubr(legend = "top") + stat_density_2d(aes(fill = Timepoint), geom = "polygon", alpha = 0.3)
+
+as.data.frame(Embeddings(seurat_T_subset, reduction = "umap_harmony")) %>%
+  cbind(seurat_T_subset@meta.data) %>% 
+  group_by(Timepoint, donor) %>% 
+  slice_sample(n = 100) %>% 
+  ggplot(aes(x=umapharmony_1, y=umapharmony_2)) +
+  geom_point() +
+ stat_density_2d(
+    aes(fill = after_stat(density)),
+    geom = "raster",
+    contour = FALSE
+  ) +
+  scale_fill_gradient(low = "white", high = "red") +  geom_point(alpha = .1) +
+  facet_wrap(~Timepoint)
+  
+```
+
+```{r Seurat - Cluster Exhaustion score}
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds"))
+
+#Plot timepoints in allergic
+seurat_T_subset <- seurat_T %>% 
+  subset(subset = group == "Allergic") %>% subset(subset = !donor == "H905")
+seurat_T_subset[["Timepoint"]] <- ifelse(seurat_T_subset[["visit"]] == "V2", "mo6", 
+                                         ifelse(seurat_T_subset[["visit"]] == "V1" & seurat_T_subset[["day"]] == "d0", "d0", "d7"))
+
+seurat_T_subset_d0 <-  seurat_T_subset %>% subset(subset = Timepoint == "d0")
+seurat_T_subset_d7 <-  seurat_T_subset %>% subset(subset = Timepoint == "d7") 
+seurat_T_subset_mo6 <-  seurat_T_subset %>% subset(subset = Timepoint == "mo6") 
+
+
+features_exhaustion <- c("PDCD1", "CTLA4", "LAG3", "TIGIT", "NR4A1", "NR4A2", "NR4A3") #Exhaustion
+features_invivoact <- c("MKI67", "CD38", "HLA-DRA")
+
+features <- c(features_invivoact, features_exhaustion)
+
+seurat_T_subset_d0 %>% VlnPlot(features = features) + scale_y_continuous(limits = c(0, 5))
+seurat_T_subset_d7 %>% VlnPlot(features = features) + scale_y_continuous(limits = c(0, 5))
+seurat_T_subset_mo6 %>% VlnPlot(features = features) + scale_y_continuous(limits = c(0, 5))
+
+seurat_T_subset %>% 
+  subset(subset = Timepoint == "d0") %>% 
+  FeaturePlot(reduction = "umap_harmony" ,features = features, keep.scale = "all", ncol = 1 ) + 
+  patchwork::plot_layout(guides = "collect") & 
+  theme(axis.title = element_blank(), axis.text  = element_blank(), axis.ticks = element_blank())
+
+
+expr <- AverageExpression(
+  seurat_T,
+  features = c(features_exhaustion, features_invivoact),
+  assays = "SCT", layer = "data",
+  group.by = c("clusters_harmony", "donor", "visit", "day")
+) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene") %>% 
+  pivot_longer(
+    cols = -gene,
+    names_to = c("clusters", "donor", "visit", "day"),
+    names_sep = "_",
+    values_to = "mean_expression"
+  ) %>% 
+  mutate(clusters = str_sub(clusters, 6)) %>% 
+  pivot_wider(names_from = "gene", values_from = "mean_expression") %>% 
+  filter(!donor == "Unstim")
+
+
+write.csv(expr, file =paste0(wd, "data\\out\\cluster_stat\\cluster_Tcells_exhaustion_expression.csv"), row.names = FALSE)
+
+```
+
+```{r DEG Tregs cluster 1 vs cluster 3}
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds"))
+seurat_T <- subset(seurat_T, idents = c(1, 3)) 
+
+#Calculate DEG between cluster 1 and 3
+T_markers <- FindMarkers(
+  object = seurat_T,
+  ident.1 = "3",
+  ident.2 = "1",
+  assay = "SCT",
+  recorrect_umi = FALSE) %>% 
+  rownames_to_column(var = "gene")
+
+#remove nitocondrial genes and others
+#set significant for colors
+gene_exclude <- grep("^MT-|^RP[SL]|^TR[ABGD][VDJ]|^IG[HKL]|^ENSG|^LINC|^CD8",  T_markers$gene, value = TRUE) 
+T_markers <- T_markers %>%
+  filter(!gene %in% gene_exclude) %>% 
+  mutate(
+    significant = case_when(
+      p_val_adj < 0.01 & avg_log2FC > 0.25 ~ "Up",
+      p_val_adj < 0.01 & avg_log2FC < -0.25 ~ "Down",
+      TRUE ~ "NS"
+    )
+)
+
+# Only keep top genes for label
+top_genes <- T_markers %>% 
+  filter(p_val_adj < 0.01) %>%
+  filter(avg_log2FC < -0.45 | avg_log2FC > 0.45) %>%
+  arrange(p_val_adj) %>%
+  slice_head(n = 15)
+
+#plot
+svglite(filename = paste0(filepath_plots, "T_cells\\DEG_Tregs.svg"), height = 4, width = 4)
+T_markers %>% 
+ggplot(aes(x = avg_log2FC, y = -log10(p_val_adj))) +
+  geom_point(aes(color = significant), alpha = 0.7, size = 1.5) +
+  scale_color_manual(values = c(Up = "red", Down = "green",NS = "grey70")) +
+  geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed") +
+  geom_hline(yintercept = -log10(0.01), linetype = "dashed") +
+  
+  geom_label_repel(data = top_genes, aes(label = gene), size = 3, max.overlaps = Inf) +
+  
+  labs(x = "Log2 (Fold Change)", y = "-log10(adj. p-val)", title = "DEG cluster 3 VS cluster 1") +
+  theme_pubr() + theme_fonts +
+  theme(legend.position = "none")
+dev.off()
+
+
+```
+
+
+```{r GSEA for all clusters in loop}
+T_markers <- read.csv(paste0(wd, "data\\out\\cluster_stat\\DEG_Tcells.csv"))
+T_markers$cluster %>% unique()
+#remove TCR, BCR, Mito and Ribosome from feature selection
+gene_exclude <- grep("^MT-|^RP[SL]",  T_markers$gene, value = TRUE) 
+
+ranked_genes <- T_markers %>%
+  filter(!gene %in% gene_exclude) %>% 
+  group_by(cluster) %>%
+  group_map(~ pull(.x, avg_log2FC, name = gene), .keep = TRUE) 
+
+#Load geneset data
+library(msigdbr, fgsea)
+msig_h  <- msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME")
+pathways <- split(msig_h$gene_symbol, msig_h$gs_name)
+
+#Initialise df
+df_gsea <- data.frame(
+  pathway = character(),
+  pval = numeric(),
+  padj = numeric(),
+  log2err = numeric(),
+  ES = numeric(),
+  NES = numeric(),
+  size = integer(),
+  leadingEdge = list()
+)
+
+for(i in 1:length(ranked_genes)){
+  
+fgsea_res <- fgsea::fgsea(
+  pathways = pathways,
+  stats    = ranked_genes[[i]],
+  minSize  = 5,
+  maxSize  = 500
+)  
+
+# Filter significant results
+sig_pathways <- fgsea_res %>%
+  arrange(desc(abs(NES))) %>% 
+  # filter(padj < 0.1) %>% 
+  head(20) %>% 
+  mutate(cluster = as.character(i)) %>% 
+  select(cluster, everything())
+  
+df_gsea <- df_gsea %>% rbind(sig_pathways)
+
+}
+
+write.csv(df_gsea %>% select(-leadingEdge), file =paste0(wd, "data\\out\\cluster_stat\\GSEA_Tcells.csv"))
+  
+
+plot_enrich <- df_gsea %>% 
+  mutate(cluster = factor(cluster, levels = as.character(1:14)),
+         pathway = str_replace(pathway, "REACTOME_", "")) %>% 
+  group_by(cluster) %>% 
+  filter(padj < 0.1) %>% 
+  slice_min(order_by = padj, n = 5) %>% 
+  mutate(
+    pathway = paste0(cluster, "_", pathway), #bind cluster name to pathway for better ordering of the factor levels
+    pathway = reorder(pathway, NES)) %>%
+  ungroup() %>% 
+  
+  ggplot(aes(x = NES, y = pathway)) +
+  ggh4x::facet_wrap2(~cluster, ncol = 2, scales = "free_y", axes = "all")+
+  geom_point(aes(size = size, color = -log10(padj))) +
+  scale_color_viridis_c() +
+  scale_y_discrete(labels = function(x) gsub("^[0-9]+_", "", x)) + #remove the cluster information from ylabel
+  labs(x = "Normalized Enrichment Score (NES)", y = "Pathway", color = "-log10(FDR)", size = "Gene set size") + 
+  theme_minimal() + theme(axis.text.y = element_text(size = 10)) 
+
+png(filename = paste0(filepath_plots, "T_cells\\cluster_enrich.png"), height = 2160, width = 2160)
+plot_enrich
+dev.off()
+
+
+df_gsea_filtered <- df_gsea %>%
+  mutate(cluster = factor(cluster, levels = as.character(1:14)),
+         pathway = str_replace(pathway, "REACTOME_", ""))
+
+pathways <- df_gsea_filtered  %>% 
+  group_by(cluster) %>% 
+  filter(padj < 0.05) %>% 
+  slice_min(order_by = padj, n = 3)  %>% 
+  pull(pathway) %>% unique()
+  
+df_gsea_filtered %>% 
+  filter(pathway %in% pathways) %>% 
+  ggplot(aes(x = cluster, y = pathway, size = NES, col = -log10(padj))) +
+  geom_point()
+
+df <- df_gsea_filtered %>% 
+  filter(pathway %in% pathways) %>% 
+  select(cluster, pathway, NES) %>% 
+  pivot_wider(names_from = "cluster", values_from = "NES") %>% 
+  mutate(across(where(is.numeric), ~ replace_na(., 0))) %>% 
+  column_to_rownames("pathway") %>% 
+  as.matrix()
+
+Heatmap(df)
+```
+
+
+```{r ADT Clusters }
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds"))
+rownames(seurat_T[["ADT"]]) <- c("CD3", "NOTCH2")
+
+#UMAP plot
+plot_CD3rna <- FeaturePlot(seurat_T, "CD3E",reduction = "umap_harmony", assay = "SCT") +  
+  labs(x= "UMAP", y = "UMAP", title = "CD3E RNA")
+plot_NOTCH2rna <- FeaturePlot(seurat_T, "NOTCH2", reduction = "umap_harmony", assay = "SCT") + 
+  labs(x= "UMAP", y = "UMAP", title = "Notch 2 RNA")
+
+
+plot_CD3prot <- FeaturePlot(seurat_T, "CD3",reduction = "umap_harmony", assay = "ADT") +   
+  labs(x= "UMAP", y = "UMAP", title = "CD3E protein")
+plot_NOTCH2prot <- FeaturePlot(seurat_T, "NOTCH2", reduction = "umap_harmony", assay = "ADT") + 
+  labs(x= "UMAP", y = "UMAP", title = "Notch 2 protein")
+  
+
+png(filename = paste0(filepath_plots, "T_cells\\ADT_umap_CD3.png"), height = 720, width = 1440)
+plot_CD3rna | plot_CD3prot 
+dev.off()
+
+png(filename = paste0(filepath_plots, "T_cells\\ADT_umap_NOTCH2.png"), height = 720, width = 1440)
+plot_NOTCH2rna | plot_NOTCH2prot 
+dev.off()
+
+
+# Correlation CD3 RNA and CD3 Prot
+adt_data <- seurat_T[["ADT"]]@layers[grepl("^data", names(seurat_T[["ADT"]]@layers))] %>% bind_rows()
+df <- data.frame("CD3_RNA" = GetAssayData(seurat_T, assay = "SCT")["CD3E", ], "CD3_Prot" = t(adt_data[1,]))
+
+svglite(paste0(filepath_plots, "T_cells\\ADT_corr_CD3.svg"), width = 3, height = 3)
+df %>% slice_sample(n = 1000) %>% 
+  ggplot(aes(x = CD3_RNA, y = CD3_Prot)) + 
+  geom_jitter(alpha = .2) + 
+  geom_smooth(method = "lm", se = FALSE) + stat_cor() + 
+  labs(x = "CD3E RNA", y = "CD3E Protein") +
+  theme_pubr + theme_fonts 
+dev.off()
+
+# Correlation NOTCH2 RNA and NOTCH2 Prot
+adt_data <- seurat_T[["ADT"]]@layers[grepl("^data", names(seurat_T[["ADT"]]@layers))] %>% bind_rows()
+df <- data.frame("NOTCH2_RNA" = GetAssayData(seurat_T, assay = "SCT")["NOTCH2", ], "NOTCH2_Prot" = t(adt_data[2,]))
+
+svglite(paste0(filepath_plots, "T_cells\\ADT_corr_NOTCH2.svg"), width = 3, height = 3)
+df %>% slice_sample(n = 1000) %>% 
+  ggplot(aes(x = NOTCH2_RNA, y = NOTCH2_Prot)) + 
+  geom_jitter(alpha = .2) + 
+  geom_smooth(method = "lm", se = FALSE) + stat_cor() + 
+  labs(x = "Notch 2 RNA", y = "Notch 2 Protein") +
+  theme_pubr + theme_fonts 
+dev.off()
+
+
+# Expression per clusters
+png(filename = paste0(filepath_plots, "T_cells\\ADT_VLNplot.png"), height = 720, width = 1440)
+VlnPlot(seurat_T, c("CD3", "NOTCH2"), alpha = .1, raster.dpi = 600)
+dev.off()
+
+
+#Median CD3 per clusters
+DefaultAssay(seurat_T) <- "ADT"
+cd3_data <- FetchData(seurat_T, vars = c("CD3", "clusters_harmony")) %>% 
+  filter(!clusters_harmony == 8)
+
+all_cells_med <- cd3_data %>% summarize(CD3_median = median(CD3)) %>% pull(CD3_median) #median for all cells
+cd3_med_fold <- cd3_data %>% 
+  group_by(clusters_harmony) %>% 
+  summarize(CD3_median = median(CD3)) %>% 
+  mutate(CD3_median_foldchange = CD3_median / all_cells_med)
+
+df_cd3_cluster <- cd3_data %>% mutate(clusters_harmony = "all Tcells") %>% rbind(cd3_data) %>% #compare each cluster to all cells
+  wilcox_test(CD3 ~ clusters_harmony, p.adjust.method = "BH", ref.group = "all Tcells") 
+
+df_cd3_cluster <- df_cd3_cluster %>% left_join(cd3_med_fold, by = c("group2" = "clusters_harmony")) %>% 
+  select(group2, CD3_median, CD3_median_foldchange, p.adj, p.adj.signif) %>% 
+  rename("clusters_harmony" = "group2") 
+
+plot_cd3 <- cd3_data %>% 
+  left_join(df_cd3_cluster, by = "clusters_harmony") %>% 
+  smartbind(cd3_data %>% mutate(clusters_harmony = "all Tcells") %>% slice_sample(prop = .1)) %>% 
+  mutate(fold = case_when(
+          CD3_median_foldchange > 1.2 ~ "> 1.2", 
+          CD3_median_foldchange < .8 ~ "< 0.8", 
+          .default = "Unchanged"),
+        fold = factor(fold, levels = c("> 1.2", "Unchanged", "< 0.8"))) %>% 
+  mutate(clusters_harmony = factor(clusters_harmony, levels = c("all Tcells",1:15))) %>% 
+  slice_sample(prop = .6, by = "clusters_harmony") %>% 
+  
+  ggplot(aes(x = clusters_harmony, y = CD3, col = fold)) +
+  geom_violin(draw_quantiles = c(0.5)) +
+  geom_boxplot(width = .2, outliers = FALSE) + 
+  # geom_quasirandom(method = "quasirandom", width=.3, size=.3, alpha = 0.1, varwidth=F, dodge.width=0.60) +
+  geom_hline(yintercept = all_cells_med, color = "red",  linetype = "dashed") +
+  scale_color_manual(values = c("> 1.2" = "green", "< 0.8" = "red", "Unchanged" = "grey50")) +
+  labs(color = "Fold change",x = NULL, y = "CD3E protein") +
+  theme_pubr(legend = "right") + theme_grid + theme_fonts + theme_x_angled
+
+
+#Median NOTCH2 per clusters
+DefaultAssay(seurat_T) <- "ADT"
+NOTCH2_data <- FetchData(seurat_T, vars = c("NOTCH2", "clusters_harmony"))
+
+all_cells_med <- NOTCH2_data %>% summarize(NOTCH2_median = median(NOTCH2)) %>% pull(NOTCH2_median) #median for all cells
+NOTCH2_med_fold <- NOTCH2_data %>% 
+  group_by(clusters_harmony) %>% 
+  summarize(NOTCH2_median = median(NOTCH2)) %>% 
+  mutate(NOTCH2_median_foldchange = NOTCH2_median / all_cells_med)
+
+df_NOTCH2_cluster <- NOTCH2_data %>% mutate(clusters_harmony = "all Tcells") %>% rbind(NOTCH2_data) %>% #compare each cluster to all cells
+  wilcox_test(NOTCH2 ~ clusters_harmony, p.adjust.method = "BH", ref.group = "all Tcells") 
+
+df_NOTCH2_cluster <- df_NOTCH2_cluster %>% left_join(NOTCH2_med_fold, by = c("group2" = "clusters_harmony")) %>% 
+  select(group2, NOTCH2_median, NOTCH2_median_foldchange, p.adj, p.adj.signif) %>% 
+  rename("clusters_harmony" = "group2") 
+
+
+plot_notch2 <- NOTCH2_data %>% 
+  left_join(df_NOTCH2_cluster, by = "clusters_harmony") %>% 
+  smartbind(NOTCH2_data %>% mutate(clusters_harmony = "all Tcells") %>% slice_sample(prop = .1)) %>% 
+  mutate(fold = case_when(
+    NOTCH2_median_foldchange > 1.2 ~ "> 1.2", 
+    NOTCH2_median_foldchange < .8 ~ "< 0.8", 
+    .default = "Unchanged"),
+         fold = factor(fold, levels = c("> 1.2", "Unchanged", "< 0.8"))) %>% 
+  
+  mutate(clusters_harmony = factor(clusters_harmony, levels = c("all Tcells",1:15))) %>% 
+  slice_sample(prop = .6, by = "clusters_harmony") %>% 
+  
+  ggplot(aes(x = clusters_harmony, y = NOTCH2, col = fold)) +
+  geom_violin(draw_quantiles = c(0.5)) +
+  geom_boxplot(width = .2, outliers = FALSE) + 
+  # geom_quasirandom(method = "quasirandom", width=.3, size=.3, alpha = 0.1, varwidth=F, dodge.width=0.60) +
+  geom_hline(yintercept = all_cells_med, color = "red",  linetype = "dashed") +
+  
+  scale_color_manual(values = c("> 1.2" = "green", "< 0.8" = "red", "Unchanged" = "grey50")) +
+  labs(color = "Fold change", x = NULL, y = "Notch 2 protein") +
+  theme_pubr(legend = "right") + theme_grid + theme_fonts + theme_x_angled
+
+
+svglite(paste0(filepath_plots, "T_cells\\ADT_cluster.svg"), height = 3, width = 8)
+# plot_cd3 | plot_notch2 + patchwork::plot_layout(guides = "collect") 
+plot_notch2 + theme(legend.position = "none") | plot_cd3 
+dev.off()
+
+```
+

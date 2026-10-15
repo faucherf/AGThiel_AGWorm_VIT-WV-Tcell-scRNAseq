@@ -1,0 +1,259 @@
+---
+title: "fauchere_WV_T - QC_and_separation"
+format: html
+editor: visual
+---
+
+
+```{r run to clean global Environment }
+rm(list = ls() )
+gc()
+```
+
+```{r Loading libraries and files paths}
+pacman::p_load(ggpubr, ggthemes, ggplot2, gridExtra, RColorBrewer, writexl, extrafont, ggrepel, rstatix, showtext, lubridate, scales, gtools, tidyverse, dplyr, svglite,DescTools, ggbeeswarm, ggpmisc)
+pacman::p_load( hdf5r, Seurat)
+
+wd <- paste0(here::here(), "/")
+wd_R <- here::here() %>% str_replace("/[^/]*$", "/")
+
+#Loading fonts from the computer: Use your file path
+font_add(family="Arial", regular="C:\\Windows\\Fonts\\Arial\\arial.ttf") #Load Arial
+font_add(family="Times", regular="C:\\Windows\\Fonts\\Time New Roman\\times.ttf") #Load Times
+showtext_auto()
+
+filepath_plots <- paste0(wd, "\\Plots\\")
+dir.create(filepath_plots, showWarnings=F)
+
+date <- gsub('[-]', '', Sys.Date()) #date of the day
+
+#sourcing code
+source(paste0(wd_R, "Source_code\\r_files\\ggplot_themes.R"))
+source(paste0(wd_R, "Source_code\\r_files\\r_functions.R"))
+
+
+```
+
+```{r Seurat loading and merging demultiplexed samples from Cell ranger multi}
+
+#Read all GEX and ab capture files
+filepath <- "C:\\Users\\Flore\\Documents\\txg-windows-v4.0.0\\cellranger_download\\"
+files <- list.files(filepath, include.dirs = T, recursive = T, full.names = T, pattern = "sample_filtered_feature_bc_matrix.h5")
+name <-  files %>% str_replace(pattern = ".*per_sample_outs/", replacement = "") %>% str_replace(pattern = "/count.*", replacement = "")
+
+sampleid <- str_sub(name, 3)
+batch <- str_split(name, "_", simplify = TRUE)[,1]
+donor <- str_split(name, "_", simplify = TRUE)[,2]
+visit <- str_split(name, "_", simplify = TRUE)[,3]
+visit <- case_when(!visit %in% c("V1", "V2")  ~ "unstim", .default = visit) #to deal with unstim
+day <- str_split(name, "_", simplify = TRUE)[,4]
+day <- case_when(!day %in% c("d0", "d7")  ~ "unstim", .default = day) #to deal with unstim
+time <- case_when(visit == "V1" & day == "d0" ~ 1, visit == "V1" & day == "d7" ~ 2, visit == "V2" ~ 3, visit == "unstim" ~ 0)
+group <- case_when(visit == "unstim" ~ "Unstim" ,donor %in% c("AH02", "H012", "H137", "H028", "H112") ~ "Non-allergic", .default = "Allergic")
+
+
+for(i in 1:length(files)){
+  
+data <- Read10X_h5(files[i])
+temp <- CreateSeuratObject(counts = data[["Gene Expression"]], ,names.field = 2, names.delim = "-")
+
+temp[["ADT"]] <- CreateAssay5Object(counts = tail(data[["Antibody Capture"]], 2)[,colnames(temp)])
+rownames(temp[["ADT"]]) <- c("CD3", "Notch2")
+
+
+#Add metadata
+temp <- temp %>% 
+  AddMetaData(metadata = sampleid[i], col.name = "sampleid") %>% 
+  AddMetaData(metadata = batch[i], col.name = "batch") %>% 
+  AddMetaData(metadata = donor[i], col.name = "donor") %>% 
+  AddMetaData(metadata = visit[i], col.name = "visit") %>% 
+  AddMetaData(metadata = day[i], col.name = "day") %>% 
+  AddMetaData(metadata = time[i], col.name = "time") %>% 
+  AddMetaData(metadata = group[i], col.name = "group")
+
+assign(paste0("S_", name[i]), temp)
+
+}
+
+#Get all the created Seurat object
+rm(data_all )
+data_all <- ls()[ls() %>% grepl(pattern = "S_")]
+data_all <- merge(x = get(data_all[1]), y = mget(data_all[-1]), add.cell.ids = data_all)
+
+length(data_all$sampleid) # Number of cells total
+table(data_all$sampleid) #Number of cells per sample
+
+rm(list = ls(pattern = "S_|temp"), "data") #clean old files
+gc()
+
+
+#####
+# QC
+data_all[["percent.mt"]] <- PercentageFeatureSet(data_all, pattern = "^MT-")
+# nFeature_RNA: Number of different genes per cells
+# nCount_RNA: number RNA per cells
+# percent.mt: Percent mitocondrial DNA, cutoff between 5 and 15% recommended, use the ncount vs mercent.mt to decide on cutoff
+
+data_all@meta.data %>% 
+  group_by(sampleid) %>% 
+  summarise(nFeature_RNA_med = median(nFeature_RNA), nCount_RNA_med = median(nCount_RNA), percent.mt_med = median(percent.mt))
+
+png(filename = paste0(filepath_plots, "all_cells\\QC_mtCount.png"), height = 720, width = 1080)
+VlnPlot(data_all, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, group.by = "batch", alpha = .1)
+dev.off()
+
+
+plot1 <- FeatureScatter(data_all, feature1 = "nCount_RNA", feature2 = "percent.mt", group.by = "batch", shuffle = TRUE, pt.size = .5)
+plot2 <- FeatureScatter(data_all, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "batch", shuffle = TRUE, pt.size = .5)
+png(filename = paste0(filepath_plots, "all_cells\\QC_nCount.png"), height = 720, width = 1080)
+plot1 + plot2
+dev.off()
+
+#Filter dead cells
+length(data_all$sampleid) # Number of cells before filtering
+
+#For threshold values: choose low threshold first (nCount_RNA >= 1000, nFeature_RNA >= 500) and readjust after plotting umap
+data_all <- subset(data_all, subset = nCount_RNA >= 4000 & nFeature_RNA >= 1000 & nFeature_RNA <= 6000 & percent.mt <= 10)
+length(data_all$sampleid) # Number of cells after filtering
+table(data_all$sampleid) #Number of cells per sample
+
+#QC samples rename for figures
+df <- data.frame(Sample = data_all$sampleid, batch = data_all$batch)
+df$Sample = factor(df$Sample, level = df$Sample %>% unique())
+
+names_old <- df$Sample %>% unique() %>% as.character() 
+names_new <- c(
+  "1_NA1", "1_WVA01_d0", "1_WVA01_d7", "1_WVA01_mo6", "1_WVA02_d0", "1_WVA02_d7", "1_Unstim",
+  "2_NA2", "2_WVA03_d0", "2_WVA03_d7", "2_WVA03_mo6", "2_WVA04_d0", "2_WVA04_d7", "2_WVA04_mo6",
+  "3_NA3", "3_WVA05_d0", "3_WVA05_d7", "3_WVA05_mo6", "3_WVA06_d0", "3_WVA06_d7", "3_WVA06_mo6",  
+  "4_NA4", "4_WVA07_d0", "4_WVA07_d7", "4_WVA07_mo6", "4_WVA08_d0", "4_WVA08_d7", "4_WVA08_mo6", "4_Unstim",
+  "5_NA5", "5_WVA09_d0", "5_WVA09_d7", "5_WVA09_mo6", "5_WVA10_d0", "5_WVA10_d7", "5_WVA10_mo6", "5_Unstim"
+  ) 
+
+df$Sample <- names_new[match(df$Sample, names_old)]
+
+png(filename = paste0(filepath_plots, "all_cells\\QC_ncells.png"), height = 720, width = 1080)
+df %>%  ggplot(aes(Sample, fill = batch)) + geom_bar() + coord_flip() + theme_pubr + theme_fonts
+dev.off()
+
+#####
+#Filter feature with expression in at least 10 cells
+counts_mat <- LayerData(JoinLayers(data_all), assay = "RNA", layer = "counts")
+
+ncells <- 10
+genes_keep <- names(which(rowSums(counts_mat > 0) >= ncells))
+length(genes_keep) / nrow(counts_mat) *100 #percentage of kept genes
+
+DefaultAssay(data_all) <- "RNA"
+data_all[["RNA"]] <-  subset(data_all, features = genes_keep)[["RNA"]] #error in subset that drop the other assay otherwise
+
+rm("counts_mat", "df")
+gc()
+
+
+#Transform the data
+data_all <- NormalizeData(data_all, assay = "ADT", normalization.method = "CLR") #Transform abs
+data_all <- SCTransform(data_all, assay = "RNA", verbose = TRUE, vars.to.regress = c("percent.mt"), return.only.var.genes = FALSE, min_cells = 0) #Transform RNA, Also scale and find variable features
+
+# Save the seurat object
+saveRDS(data_all, file = paste0(wd, "data\\out\\seurat_obj\\seurat_all_Transformed.rds"))
+gc()
+
+```
+
+```{r Seurat - Batch effect and clustering}
+library(harmony) #batch correction
+#Read the previously created Seurat object
+data_all <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_all_Transformed.rds"))
+
+##### #Variable feature selection
+#remove TCR, BCR, Mito and Ribosome from feature selection
+DefaultAssay(data_all) <- "SCT"
+VariableFeatures(data_all) <- setdiff(VariableFeatures(data_all),
+grep("^MT-|^RP[SL]|^TR[ABGD][VDJ]|^IG[HKL]",  VariableFeatures(data_all), value = TRUE) 
+)
+
+#Run UMAP on non corrected data
+data_all <- RunPCA(data_all, npcs = 30)
+ElbowPlot(data_all) #look at elbow curve and use it to rerun PCA
+
+data_all <- data_all %>% 
+  RunPCA(npcs = 16) %>% 
+  FindNeighbors(dims = 1:16, reduction = "pca") %>% 
+  FindClusters(resolution = .25, algorithm = 4, cluster.name = "unintegrated_clusters") %>% 
+  RunUMAP(dims = 1:16, reduction = "pca", reduction.name = "umap_unintegrated")
+DimPlot(data_all, reduction = "umap_unintegrated", group.by = c("batch", "unintegrated_clusters"))
+
+#Correct batch effect with harmony
+data_all <- data_all %>% 
+  IntegrateLayers(group.by.vars = "batch", assay.use = "SCT", normalization.method = "SCT", orig.reduction = "pca", method = HarmonyIntegration, new.reduction = "pca_harmony", theta = 4) %>% 
+  RunUMAP(reduction = "pca_harmony", dims = 1:16, reduction.name = "umap_harmony") %>% 
+  FindNeighbors(reduction = "pca_harmony", dims = 1:16) %>% 
+  FindClusters(resolution = .3, algorithm = 4, cluster.name = "cluster_harmony")
+
+svglite(filename = paste0(filepath_plots, "all_cells\\QC_Batch_Harmony.svg"), height = 8, width = 9)
+ggarrange(DimPlot(data_all, reduction = "umap_unintegrated", group.by = c("batch", "unintegrated_clusters"), pt.size = .2, shuffle = TRUE, label = TRUE), 
+          DimPlot(data_all, reduction = "umap_harmony", group.by = c("batch", "cluster_harmony"), pt.size = .2, shuffle = TRUE, label = TRUE), 
+          nrow = 2)
+dev.off()
+
+#Save
+saveRDS(data_all, file = paste0(wd, "data\\out\\seurat_obj\\seurat_all_Integrated.rds"))
+gc()
+
+```
+
+```{r Seurat separate T and B cells}
+data_all <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_all_Integrated.rds"))
+
+#Plot clusters
+svglite(filename = paste0(filepath_plots, "all_cells\\all_umap_cluster.svg"), height = 4, width = 9)
+DimPlot(data_all, reduction = "umap_harmony", group.by = c("batch", "cluster_harmony"), pt.size = .2,
+        shuffle = TRUE, label = TRUE)
+dev.off()
+
+#Check for thresholds value if difference on umap clustering: may want to adjust
+data_all[["mt"]] <- data_all[["percent.mt"]] > 10
+data_all[["feature"]] <- data_all[["nFeature_RNA"]] < 1000
+data_all[["count"]] <- data_all[["nCount_RNA"]] < 4000
+FeaturePlot(data_all, reduction = "umap_harmony" ,features = c("nFeature_RNA", "feature" ,"nCount_RNA", "count", "percent.mt","CD3D", "CD3E", "TRAC", "FOXP3", "IKZF2", "CTLA4"))
+VlnPlot(data_all,features = c("nFeature_RNA", "feature" ,"nCount_RNA", "count", "percent.mt", "CD3D","CD3E", "TRAC", "FOXP3", "IKZF2", "CTLA4"))
+
+data_all[[c("mt", "feature", "count")]] <- NULL
+
+
+png(filename = paste0(filepath_plots, "all_cells\\markers_umap.png"), height = 360, width = 2160)
+FeaturePlot(data_all, reduction = "umap_harmony" ,features = c("nCount_RNA", "percent.mt", "CD14", "CD19", "MS4A1", "CD3E"), ncol = 6) &
+  theme(axis.title = element_blank(), axis.text  = element_blank(), axis.ticks = element_blank())
+dev.off()
+
+png(filename = paste0(filepath_plots, "all_cells\\markers_clusters.png"), height = 360, width = 2160)
+VlnPlot(data_all, features = c("nCount_RNA", "percent.mt", "CD14", "CD19", "MS4A1", "CD3E"), ncol = 6)
+dev.off()
+
+
+#Remove all processing obj and save
+#T cells
+subset_T <- subset(data_all, idents = c(1:3, 5, 6, 8, 9, 12))
+DefaultAssay(subset_T) <- "RNA" 
+subset_T@assays[["SCT"]] <- NULL
+subset_T@meta.data[,c("unintegrated_clusters", "cluster_harmony")] <- NULL
+subset_T@graphs <- list()
+subset_T@reductions <- list()
+subset_T@commands <- list()
+
+saveRDS(subset_T, file = paste0(wd, "data\\out\\seurat_obj\\seurat_T.rds"))
+
+#B cells
+subset_B <- subset(data_all, idents = c(11))
+DefaultAssay(subset_B) <- "RNA" 
+subset_B@assays[["SCT"]] <- NULL
+subset_B@meta.data[,c("unintegrated_clusters", "cluster_harmony")] <- NULL
+subset_B@graphs <- list()
+subset_B@reductions <- list()
+subset_B@commands <- list()
+subset_B <- subset(subset_B, subset = batch %in% c("1", "4", "5")) #remove batch 2 and 3: poor staining quality of the ara h 2 specific B cells at the sorter
+saveRDS(subset_B, file = paste0(wd, "data\\out\\seurat_obj\\seurat_B.rds"))
+
+
+```

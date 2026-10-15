@@ -1,0 +1,878 @@
+---
+title: "fauchere_WV_T - 3_TCR_analysis"
+format: html
+editor: visual
+---
+
+```{r run to clean global Environment }
+rm(list = ls() )
+gc()
+
+```
+
+```{r Loading libraries and files paths}
+pacman::p_load(ggpubr, ggthemes, ggplot2, gridExtra, RColorBrewer, writexl, extrafont, ggrepel, rstatix, showtext, lubridate, scales, gtools, tidyverse, dplyr, svglite, DescTools, ggbeeswarm, ggpmisc, patchwork, circlize)
+pacman::p_load(hdf5r, Seurat, scRepertoire)
+
+#Loading fonts from the computer: Use your file path
+wd <- paste0(here::here(), "/")
+wd_R <- here::here() %>% str_replace("/[^/]*$", "/")
+
+
+#Loading fonts from the computer: Use your file path
+font_add(family="Arial", regular="C:\\Windows\\Fonts\\Arial\\arial.ttf") #Load Arial
+font_add(family="Times", regular="C:\\Windows\\Fonts\\Time New Roman\\times.ttf") #Load Times
+showtext_auto()
+
+filepath_plots <- paste0(wd, "\\Plots\\TCR_plots\\")
+dir.create(filepath_plots, showWarnings=F)
+
+filepath_tables <- paste0(wd, "\\tables_out\\Stats\\")
+
+date <- gsub('[-]', '', Sys.Date()) #date of the day
+
+#sourcing code
+source(paste0(wd_R, "Source_code\\r_files\\ggplot_themes.R"))
+source(paste0(wd_R, "Source_code\\r_files\\r_functions.R"))
+
+
+
+names <- list(
+  `1` = "Treg act low",
+  `3` = "Treg act high",
+  
+  `2` = "Th2 no cytokines",
+  `5` = "Th2 classical",
+  `9` = "Th2 IL5+ IL3-",
+  `7` = "Th2 IL31+",
+  `6` = "Th2 Granzyme+",
+  
+  `10` = "CD4 XCL1+",
+  `11` = "CD4 IL2+",
+  `4` = "CD4 CCL20+ IL4l1+"
+)
+order <- names %>% unlist() %>% as.vector()
+```
+
+##### TCR
+
+```{r Load TCR and keep only the one for the cells that were filtered during GEX analysis}
+library(scRepertoire) #For TCR and BCR annotation
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds")) #load Tcells dataset
+seurat_T <- seurat_T %>% subset(subset = !clusters_harmony %in% c(8,12)) #remove cluster 8 and 12: not biologicly relevent
+
+files_vdj_T <- list.files(filepath, include.dirs = T, recursive = T, full.names = T, pattern = "filtered_contig_annotations") %>% str_subset("vdj_t")
+name_T <-  files_vdj_T %>% str_replace(pattern = ".*per_sample_outs/", replacement = "") %>% str_replace(pattern = "/vdj_t.*", replacement = "")
+name_T <- paste0("S_", name_T)
+
+# load TCR 
+data_tcr <- lapply(files_vdj_T, read.csv) 
+combined_TCR <- combineTCR(data_tcr, 
+                           samples = name_T,
+                           removeNA = TRUE, 
+                           removeMulti = FALSE, 
+                           filterMulti = TRUE)
+
+#add metadata
+combined_TCR <- lapply(combined_TCR, function(df){
+  mylist <- df$sample %>% str_sub(5) %>% str_split("_") %>% .[[1]]
+  df$donor <- mylist[1]
+  df$visit <- mylist[2]
+  df$day <- mylist[3]
+  return(df)
+})
+
+combined_TCR <- combined_TCR[!grepl("Unstim", names(combined_TCR))] #filter Unstim sample: not relevent
+names_old <- names(combined_TCR) 
+names_new <- c(
+  "1_NA1", "1_WVA01_d0", "1_WVA01_d7", "1_WVA01_mo6", "1_WVA02_d0", "1_WVA02_d7",
+  "2_NA2", "2_WVA03_d0", "2_WVA03_d7", "2_WVA03_mo6", "2_WVA04_d0", "2_WVA04_d7", "2_WVA04_mo6",
+  "3_NA3", "3_WVA05_d0", "3_WVA05_d7", "3_WVA05_mo6", "3_WVA06_d0", "3_WVA06_d7", "3_WVA06_mo6",  
+  "4_NA4", "4_WVA07_d0", "4_WVA07_d7", "4_WVA07_mo6", "4_WVA08_d0", "4_WVA08_d7", "4_WVA08_mo6", 
+  "5_NA5", "5_WVA09_d0", "5_WVA09_d7", "5_WVA09_mo6", "5_WVA10_d0", "5_WVA10_d7", "5_WVA10_mo6" 
+  ) 
+df_names_new <- data.frame(sampleid = names_old, sampleid_new = names_new)
+#QC: n_TCR per file and per batch
+p <- data.frame(
+  samples = names_new,
+  n_TCR = sapply(combined_TCR, nrow)) %>% 
+  mutate(batch = sub(".*?([0-9]+).*", "\\1", samples)) %>% 
+  
+  ggplot(aes(samples, n_TCR, fill = batch)) + 
+    geom_col() + 
+    theme_pubr + theme_x_angled + theme_grid + theme_fonts +
+    theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+
+svglite(paste0(filepath_plots, "QC_nTCR_batch.svg"), width = 8, height = 4)
+p
+dev.off()
+
+#Very little clone information in the Batch 1: Experimental error: filtering out
+combined_TCR <- combined_TCR[!grepl("S_1_", names(combined_TCR))]
+
+#####
+# Remove cells which are not present in the Tcells datasets (cells that where filtered out)
+combined_TCR_filter <- combined_TCR 
+
+#loop through files to retain the filtered cells from the scRNAseq
+for (i in 1:length(names(combined_TCR_filter))) {
+  sample <- names(combined_TCR_filter)[i]
+
+  screp_barcodes <- combined_TCR[[i]]$barcode
+  seurat_barcodes <- rownames(seurat_T@meta.data[seurat_T@meta.data$sampleid == sample %>% str_sub(5),])
+  
+  TCR_clonotype_barcodes_filtered <- subset(combined_TCR[[i]], screp_barcodes %in% (seurat_barcodes ))
+  combined_TCR_filter[[i]] <- TCR_clonotype_barcodes_filtered
+}
+
+#Add metadata to the table
+metadata <- seurat_T@meta.data %>% 
+  as.data.frame() %>% 
+  rownames_to_column("barcode") %>% 
+  filter(!group %in% c("Unstim")) %>% 
+  mutate(timepoint = case_when(
+    group == "Non-allergic" ~ "Non-allergic",
+    (group == "Allergic" & visit == "V1" & day == "d0") ~ "d0",
+    (group == "Allergic" & visit == "V1" & day == "d7") ~ "d7",
+    (group == "Allergic" & visit == "V2" & day == "d0") ~ "mo6"
+  )) %>% 
+  select("barcode","sampleid", "donor", "visit", "day", "timepoint", "group", "clusters_harmony") %>% 
+  left_join(
+    df_names_new %>% 
+      mutate(sampleid = str_sub(sampleid, 5),
+             sampleid_new = str_sub(sampleid_new, 3))
+      )
+
+
+```
+
+
+```{r TCR clonality analysis}
+
+#####
+# Explore TCR clonality
+#Make clonality table
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds")) #load Tcells dataset
+seurat_T <- seurat_T %>% subset(subset = !clusters_harmony %in% c(8,12)) #remove cluster 8 and 12: not
+combined_TCR_filter <- readRDS(paste0(wd, "data\\out\\TCR\\scRepertoire_TCR_filtered.rds"))
+TCR <- combined_TCR_filter
+
+names_new <- c(
+  "1_NA1", "1_WVA01_d0", "1_WVA01_d7", "1_WVA01_mo6", "1_WVA02_d0", "1_WVA02_d7",
+  "2_NA2", "2_WVA03_d0", "2_WVA03_d7", "2_WVA03_mo6", "2_WVA04_d0", "2_WVA04_d7", "2_WVA04_mo6",
+  "3_NA3", "3_WVA05_d0", "3_WVA05_d7", "3_WVA05_mo6", "3_WVA06_d0", "3_WVA06_d7", "3_WVA06_mo6",  
+  "4_NA4", "4_WVA07_d0", "4_WVA07_d7", "4_WVA07_mo6", "4_WVA08_d0", "4_WVA08_d7", "4_WVA08_mo6", 
+  "5_NA5", "5_WVA09_d0", "5_WVA09_d7", "5_WVA09_mo6", "5_WVA10_d0", "5_WVA10_d7", "5_WVA10_mo6" 
+  ) 
+names(combined_TCR_filter) <- names_new[7:34] %>% str_sub(3)
+
+df_clonality <- clonalQuant(combined_TCR_filter, cloneCall="aa", chain = "both", scale = T, exportTable = T) %>% 
+  rename("sample" = "values") %>% 
+  separate(sample, into = c("donor", "timepoint"), sep="_") %>% 
+  mutate(group = ifelse(str_starts(donor, "NA"), "Non-allergic", "Allergic")) %>% 
+  mutate(timepoint = ifelse(group == "Non-allergic", "Non-allergic", timepoint))
+
+
+df_clonality %>% 
+  filter(timepoint %in% c("Non-allergic", "d0")) %>% 
+  ggplot(aes(group, scaled)) +
+    geom_point()
+
+df_clonality %>% 
+  filter(group == "Allergic") %>% 
+  ggplot(aes(timepoint, scaled)) +
+    geom_point() +
+    geom_line(aes(group = donor))
+
+TCR_list_clusters <- bind_rows(combined_TCR_filter) %>% 
+  left_join(
+  seurat_T@meta.data %>% 
+    as.data.frame() %>% 
+    select(clusters_harmony) %>% 
+    rownames_to_column("barcode")
+  ) %>% 
+  group_by(sample, clusters_harmony) %>% 
+  group_split() 
+names(TCR_list_clusters) <- c(1:length(TCR_list_clusters))
+
+  clonalQuant(TCR_list_clusters, cloneCall="aa", chain = "both", scale = T, exportTable = T) %>% 
+  rename("sample" = "values") %>% 
+  separate(sample, into = c("donor", "timepoint"), sep="_") %>% 
+  mutate(group = ifelse(str_starts(donor, "NA"), "Non-allergic", "Allergic")) %>% 
+  mutate(timepoint = ifelse(group == "Non-allergic", "Non-allergic", timepoint))
+
+
+
+#n of clones per files: scaled
+svglite(paste0(filepath_plots, "Clonality_scaled.svg"), width = 6, height = 4)
+clonalQuant(combined_TCR_filter, cloneCall="aa", chain = "both", scale = T) + 
+  labs(x=NULL) +
+  theme_pubr + theme_x_angled + theme_grid + theme_fonts + theme(legend.position = "none") +
+  theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+dev.off()
+
+svglite(paste0(filepath_plots, "Clonality_scaled_Allergic.svg"), width = 6, height = 4)
+clonalQuant(combined_TCR_filter[!grepl("NA", names(combined_TCR_filter))],
+            cloneCall="aa", chain = "both", scale = T) + 
+  labs(x=NULL) +
+  theme_pubr + theme_x_angled + theme_grid + theme_fonts + theme(legend.position = "none") +
+  theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+dev.off()
+
+
+#Top 10 clones proportion
+svglite(paste0(filepath_plots, "Clonality_split_top.svg"), width = 9, height = 4)
+clonalProportion(combined_TCR_filter, cloneCall = "aa", clonalSplit = c(1, 10, 25, 100, 500, 1e+05))  +
+  labs(x=NULL) +
+  theme_pubr(legend="right") + theme_x_angled + theme_grid + theme_fonts +
+  theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+dev.off()
+
+#Top 10 clones proportion
+svglite(paste0(filepath_plots, "Clonality_split_top_Allergic.svg"), width = 9, height = 4)
+clonalProportion(
+  combined_TCR_filter[!grepl("NA", names(combined_TCR_filter))], 
+  cloneCall = "aa", clonalSplit = c(1, 10, 25, 100, 500, 1e+05))  +
+  labs(x=NULL) +
+  theme_pubr(legend="right") + theme_x_angled + theme_grid + theme_fonts +
+  theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+dev.off()
+
+
+#Clone overlap between samples
+df_list <- combined_TCR_filter[order(names(combined_TCR_filter))] #reorder alphabeticaly
+mat <- clonalOverlap(df_list,
+              cloneCall = "aa", method = "overlap", exportTable = TRUE) 
+mat <- round(mat,2) 
+# mat[mat <= .01] <- 0
+coef_matrix_as_matrix <- as.matrix(mat)
+mat_melt <- data.frame(
+  Var1 = rep(rownames(coef_matrix_as_matrix), ncol(coef_matrix_as_matrix)), 
+  Var2 = rep(colnames(coef_matrix_as_matrix), each = nrow(coef_matrix_as_matrix)), 
+  value = as.vector(coef_matrix_as_matrix))
+
+p <- ggplot(mat_melt, aes(x = .data[["Var1"]], y = .data[["Var2"]], fill = .data[["value"]])) +
+  geom_tile() + 
+  geom_tile(data = mat_melt[!is.na(mat_melt[, "value"]), ], 
+            fill = NA, lwd = 0.25, color = "black") + 
+  scale_fill_gradientn(colours = viridis::inferno(100), na.value = "white") +
+  geom_text(aes(label = round(value, digits = 2), color = ifelse(value <= .01, "white", 
+        "black")), na.rm = TRUE) +
+  scale_color_identity() +
+  labs(x=NULL, x=NULL) +
+  theme_pubr(legend="right") + theme_x_angled + theme_grid + theme_fonts +
+  theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+
+ 
+svglite(paste0(filepath_plots, "Clonality_overlap_samples.svg"), width = 12, height = 9)
+p
+dev.off()
+
+
+#Compare timepoint in one donor
+clonalCompare(combined_TCR_filter, samples = c("A05_d0", "A05_d7", "A05_mo6"), top.clones = 10,  cloneCall="aa", graph = "alluvial") + 
+  theme(legend.position = "none")
+
+clonalCompare(combined_TCR_filter, samples = c("A06_d0", "A06_d7", "A06_mo6"), top.clones = 10,  cloneCall="aa", graph = "alluvial") + 
+  theme(legend.position = "none")
+
+```
+
+```{r TCR clonal dynamic}
+#####
+# Explore TCR clonality
+#Make clonality table
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds")) #load Tcells dataset
+seurat_T <- seurat_T %>% subset(subset = !clusters_harmony %in% c(8,12) & !batch == 1 & !group == "Unstim")
+combined_TCR_filter <- readRDS(paste0(wd, "data\\out\\TCR\\scRepertoire_TCR_filtered.rds"))
+
+seurat_T[["timepoint"]] <- case_when(
+  (seurat_T$group != "Non-allergic" & seurat_T$visit == "V1" & seurat_T$day == "d0") ~ "d0",
+  (seurat_T$group != "Non-allergic" & seurat_T$visit == "V1" & seurat_T$day == "d7") ~ "d7",
+  (seurat_T$group != "Non-allergic" & seurat_T$visit == "V2" & seurat_T$day == "d0") ~ "mo6",
+  (seurat_T$group == "Non-allergic") ~ "Non-allergic"
+  )
+
+seurat_T[["clusters_names"]] <- recode(seurat_T$"clusters_harmony",  !!!names)
+
+seurat_T_TCR <- combineExpression(combined_TCR_filter, seurat_T, 
+                                  cloneCall="aa", proportion = F, group.by = NULL,
+                                  cloneSize=c(Single=1, Small=5, Medium=20, Large=100, Hyperexpanded=500)
+                                  )
+
+
+#keep only allergic donors
+combined_TCR_filter <- combined_TCR_filter[str_detect(names(combined_TCR_filter), "H9")]
+
+#rename TCR_filter
+donor <- names(combined_TCR_filter) %>% str_sub(5, -7)
+donor_title <- c("WVA03", "WVA04", "WVA05", "WVA06", "WV0A07", "WVA08", "WVA09", "WVA10")
+
+timepoints <- names(combined_TCR_filter) %>% str_sub(10) 
+timepoints <- case_when(
+  timepoints == "V1_d0" ~ "d0", 
+  timepoints == "V1_d7" ~ "d7",
+  timepoints == "V2_d0" ~ "mo6"
+          )
+names(combined_TCR_filter) <- paste0(donor, "_", timepoints)
+
+
+#data to highlight treg clones
+Treg_clones <- seurat_T_TCR@meta.data %>% 
+  as_tibble() %>% 
+  select(donor, timepoint, CTaa, clusters_names) %>% 
+  mutate(Sample = paste0(donor, "_", timepoint)) %>% 
+  select(- donor, -timepoint) %>% 
+  rename(original.clones = CTaa) %>% 
+  mutate(clusters_names = ifelse(
+    clusters_names %in% c("Treg act low", "Treg act high"), "Treg", "Tconv")
+    ) %>% 
+  distinct() %>% 
+  filter(clusters_names == "Treg") %>% 
+  pull(original.clones)
+
+# All population
+plots <- list()
+for(donor_sub in unique(donor)){
+
+data <- combined_TCR_filter[
+  grepl(donor_sub, names(combined_TCR_filter), fixed = TRUE)
+]
+
+  plots[[donor_sub]] <- clonalCompare(
+                  data, 
+                  top.clones = 10, 
+                  # samples = samples, 
+                  cloneCall="CTaa", 
+                  # highlight.clones = metadata,
+                  graph = "alluvial",
+                  relabel.clones = T,
+                  export.table = F)
+  print(donor_sub)
+}
+plots
+
+
+#Only Treg
+plots <- list()
+for(i in 1:length(unique(donor))){
+
+  donor_sub <- unique(donor)[i]
+  title <- donor_title[i]
+  data <- combined_TCR_filter[
+    grepl(donor_sub, names(combined_TCR_filter), fixed = TRUE)
+  ]
+
+data <- lapply(data, function(df) {
+  df %>% filter(CTaa %in% Treg_clones)
+})
+
+
+  plots[[donor_sub]] <- clonalCompare(
+                  data, 
+                  top.clones = 10, 
+                  # samples = samples, 
+                  cloneCall="CTaa", 
+                  # highlight.clones = metadata,
+                  graph = "alluvial",
+                  relabel.clones = T,
+                  export.table = F) +
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+    labs(y="Treg clones Proportion") + ggtitle(title) +
+    scale_x_discrete(labels = c("do", "d7", "mo6"))
+  print(donor_sub)
+}
+
+svglite(paste0(filepath_plots, "T_clone_dynamic_Treg.svg"), width = 15, height = 8)
+print(wrap_plots(plots, ncol = 4))
+dev.off()
+
+
+
+#Only Tconv
+plots <- list()
+for(i in 1:length(unique(donor))){
+
+  donor_sub <- unique(donor)[i]
+  title <- donor_title[i]
+data <- combined_TCR_filter[
+  grepl(donor_sub, names(combined_TCR_filter), fixed = TRUE)
+]
+
+data <- lapply(data, function(df) {
+  df %>% filter(!CTaa %in% Treg_clones)
+})
+
+
+  plots[[donor_sub]] <- clonalCompare(
+                  data, 
+                  top.clones = 10, 
+                  # samples = samples, 
+                  cloneCall="CTaa", 
+                  # highlight.clones = metadata,
+                  graph = "alluvial",
+                  relabel.clones = T,
+                  export.table = F) +
+    theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) + 
+    labs(y="Tconv clones Proportion") + ggtitle(title) +
+    scale_x_discrete(labels = c("do", "d7", "mo6"))
+  print(donor_sub)
+}
+
+svglite(paste0(filepath_plots, "T_clone_dynamic_Tconv.svg"), width = 15, height = 8)
+print(wrap_plots(plots, ncol = 4))
+dev.off()
+```
+
+# Combine to Seurat object and uses scRepertoire tools
+
+```{r TCR combine to Seurat object}
+#Combine to Seurat obj per sample
+seurat_T <- readRDS(paste0(wd, "data\\out\\seurat_obj\\seurat_Tcells_Integrated.rds")) #load Tcells dataset
+seurat_T <- seurat_T %>% subset(subset = !clusters_harmony %in% c(8,12) & !batch == 1 & !group == "Unstim")
+combined_TCR_filter <- readRDS(paste0(wd, "data\\out\\TCR\\scRepertoire_TCR_filtered.rds"))
+
+seurat_T[["timepoint"]] <- case_when(
+  (seurat_T$group != "Non-allergic" & seurat_T$visit == "V1" & seurat_T$day == "d0") ~ "d0",
+  (seurat_T$group != "Non-allergic" & seurat_T$visit == "V1" & seurat_T$day == "d7") ~ "d7",
+  (seurat_T$group != "Non-allergic" & seurat_T$visit == "V2" & seurat_T$day == "d0") ~ "mo6",
+  (seurat_T$group == "Non-allergic") ~ "Non-allergic"
+  )
+
+seurat_T[["clusters_names"]] <- recode(seurat_T$"clusters_harmony",  !!!names)
+
+seurat_T_TCR <- combineExpression(combined_TCR_filter, seurat_T, 
+                                  cloneCall="aa", proportion = F, group.by = NULL,
+                                  cloneSize=c(Single=1, Small=5, Medium=20, Large=100, Hyperexpanded=500)
+                                  )
+
+
+#Add clusters from TCRdist3 by matching
+#Import after TCRdist3
+TCR_clust <- read_csv("C:\\Users\\flore\\OneDrive - Charité - Universitätsmedizin Berlin\\BCRT\\Food@\\R\\Food@Sequencing\\data\\TCRdist\\TCR_clusters.csv") %>% 
+  rename("TCR_cluster" = "leiden_cluster") %>% 
+  mutate(CTaa = paste0(cdr3_a_aa, "_", cdr3_b_aa)) %>% 
+  select(CTaa, TCR_cluster) %>% 
+  distinct()
+
+TCR_clust <- data.frame(y=1:length(seurat_T_TCR@meta.data[["CTaa"]]), CTaa = seurat_T_TCR@meta.data[["CTaa"]]) %>% 
+  left_join(TCR_clust) %>% 
+  distinct(y, .keep_all = TRUE) %>% 
+  arrange(y)
+
+seurat_T_TCR$TCR_cluster <- as.vector(TCR_clust["TCR_cluster"])
+
+```
+
+```{r TCR clonality on umap and cluster harmony}
+#Define color palette 
+colorblind_vector <- hcl.colors(n=7, palette = "inferno", fixup = TRUE)
+
+DimPlot(seurat_T_TCR, reduction = "umap_harmony",  combine = TRUE, group.by = c("cloneSize")) + 
+  plot_layout(guides = "collect") +
+  scale_color_manual(values=rev(colorblind_vector[c(1,3,5,7)]))
+
+
+df_umap_tcr <- Embeddings(seurat_T_TCR, reduction = "umap_harmony") %>% 
+  as.data.frame() %>% 
+  rownames_to_column("id") %>% 
+  left_join(seurat_T_TCR@meta.data %>% 
+              select(group, cloneSize, clusters_harmony,clusters_names, clonalFrequency, donor, visit, day) %>% 
+              rownames_to_column("id")
+            ) %>% 
+  slice_sample(prop = 1) %>% 
+  filter(!is.na(cloneSize)) %>% 
+  mutate(cloneSize = recode_factor(cloneSize, 
+                                   "Single (0 < X <= 1)" = "Single (1)",
+                                   "Small (1 < X <= 5)" = "Small (2:5)",
+                                   "Medium (5 < X <= 20)" = "Medium (6:20)",
+                                   "Large (20 < X <= 100)" = "Large (21:100)"
+                                   )) %>% 
+  mutate(timepoint = case_when(
+    (visit=="V1" & day=="d0") ~"d0",
+    (visit=="V1" & day=="d7") ~"d7",
+    (visit=="V2" & day=="d0") ~"mo6",
+  ))
+
+#Export for statistics
+df_umap_tcr %>% write.csv(paste0(filepath_tables, "TCR_Clonality.csv"),row.names = FALSE)
+
+p <- df_umap_tcr %>% 
+  ggplot(aes(umapharmony_1, umapharmony_2, col = cloneSize)) +
+  geom_point(size = .25, alpha = 1) +
+  scale_color_manual(values=rev(colorblind_vector[c(7,5,3,1)])) +
+  labs(x="UMAP", y="UMAP") +
+  theme_pubr(legend = "top") + theme_fonts + theme_facet +
+  guides(color = guide_legend(override.aes = list(size = 2), nrow=2), byrow = TRUE) +
+  theme(legend.box.margin = margin(0, 0, -10, 0), legend.margin = margin(0, 0, -5, 0))
+
+svglite(paste0(filepath_plots, "umap_Clonality.svg"), width = 3.5, height = 4)
+p
+dev.off()
+
+
+#plot clonality per clusters
+cols <- brewer.pal(10, "Set3")
+
+p <- df_umap_tcr %>% select(clusters_names, clonalFrequency) %>% 
+  group_by(clusters_names) %>% 
+  summarise(mean_freq = mean(clonalFrequency)) %>% 
+  mutate(clusters_names = factor(clusters_names, levels= order)) %>% 
+  
+  ggplot(aes(clusters_names, mean_freq, fill=clusters_names)) +
+  geom_col(width = .75) +
+  labs(x=NULL, y="Clone size (mean)") +
+  scale_fill_manual(values =  cols) +
+  theme_pubr() + theme_fonts + theme_grid + theme_x_angled +
+  theme(legend.position = "none")
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality.svg"), width = 4.5, height = 5)
+p
+dev.off()
+
+
+
+##### 
+#Shannon`s entropy
+seurat_T_TCR[["grouping"]] <- paste0(
+  seurat_T_TCR$clusters_names, "_", 
+  seurat_T_TCR$timepoint, "_", 
+  seurat_T_TCR$donor)
+
+df <- seurat_T_TCR %>% subset(subset = timepoint != "Non-allergic") %>% 
+  clonalDiversity(cloneCall = "CTaa", 
+                  x.axis = "clusters_names", 
+                  group.by = "grouping", 
+                  metric = "norm.entropy", 
+                  export.table = T) %>% 
+  separate(grouping, into = c("clusters_names", "timepoint", "donor"), sep = "_") %>% 
+  mutate(clusters_names = factor(clusters_names, levels= order))
+
+p <- df %>%
+  ggplot(aes(x=clusters_names, y=value, fill=clusters_names)) +
+    # geom_boxplot(outlier.shape=NA, width =0.75, position = position_dodge(width = 0.6))+
+    geom_violin(scale = "width", width =0.75)+  
+    geom_boxplot(width = .25) +
+    geom_point(size=1, alpha=.5) +
+    labs(x=NULL, y="Normalized Shannon Entropy") +
+    scale_y_continuous(limits = c(.65 ,NA)) +
+    scale_fill_manual(values = cols) + scale_colour_manual(values = cols) +
+    theme_pubr() + theme_fonts + theme_grid + theme_x_angled +
+    theme(legend.position = "none")
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_shannon.svg"), width = 4.5, height = 5)
+p
+dev.off()
+
+
+df %>% 
+  ggplot(aes(x=timepoint, y=value)) +
+  facet_wrap(~clusters_names) +
+  geom_boxplot(outlier.shape=NA, width =0.5, position = position_dodge(width = 0.6))+
+    geom_line(aes(group = donor), alpha = .5) +
+    geom_quasirandom(method = "quasirandom", width=.05, size=1, alpha = 0.6, varwidth=F, dodge.width=0.60) +
+    
+    scale_color_manual(values = c("Non-allergic" = "#000000" , "Allergic" = "#D55E00")) +
+    coord_cartesian(clip = "off") +
+    labs(x = NULL, col = "Cohort", y = "Normalized Shannon Entropy")
+
+
+df %>%
+  ggplot(aes(x=timepoint, y=value, col=donor)) +
+    facet_wrap(~clusters_names) +
+    geom_point(size=1, alpha=.5) +
+    labs(x=NULL, y="Normalized Shannon Entropy") +
+    scale_y_continuous(limits = c(.65 ,NA)) 
+```
+
+```{r TCR circos plots d0}
+#####
+# circle plot  
+#Even if throw error messages: still succesfull
+seurat_T_TCR_d0 <- seurat_T_TCR %>% subset(subset = timepoint == "d0")
+cols <- brewer.pal(10, "Set3")
+fn_circos <- function(df, plot_title = NULL) {
+  
+  df %>%
+    getCirclize(
+      cloneCall = "CTaa",
+      method = "jaccard",
+      group.by = "clusters_names",
+      include.self = TRUE,
+      proportion = TRUE
+    ) %>%
+    mutate(value = ifelse(value < 0.01, 0, value)) %>%
+    chordDiagram(
+      grid.col = cols,
+      link.border = "black",
+      transparency = 0.3,
+      order = order,
+      annotationTrack = "grid",
+      preAllocateTracks = list(track.height = 0.26),
+      self.link = 1
+    )
+  
+  # Cluster labels
+  circos.trackPlotRegion(
+    track.index = 1,
+    panel.fun = function(x, y) {
+      sector.name <- CELL_META$sector.index
+      xlim <- CELL_META$xlim
+      
+      circos.text(
+        mean(xlim),
+        CELL_META$ylim[1],
+        sector.name,
+        facing = "clockwise",
+        niceFacing = TRUE,
+        adj = c(0, 0.5),
+        cex = 0.75
+      )
+    },
+    bg.border = NA
+  )
+  
+  # Donor title
+  if (!is.null(plot_title)) {
+    title(plot_title, cex.main = 1.5, font.main = 2)
+  }
+}
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot.svg"), width = 5, height = 5)
+tryCatch({
+seurat_T_TCR_d0 %>%
+  fn_circos
+  }, error = function(e) {
+    message("")
+  })
+
+dev.off()
+
+#Donor separated in loop
+donor <- seurat_T_TCR_d0[["donor"]]$donor %>% unique() %>% sort()
+donor_title <- c("WVA03", "WVA04", "WVA05", "WVA06", "WVA07", "WVA08", "WVA09", "WVA10")
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot_separatedperdonor.svg"), width = 15, height = 8)
+par(mfrow = c(2, 4))
+for(i in 1:length(donor)){
+  donor_sub <- donor[i]
+  title <- donor_title[i]
+  df <- seurat_T_TCR_d0 %>% subset(subset = donor == donor_sub)
+  
+  tryCatch({
+  df %>%
+  fn_circos(plot_title = title)
+  }, error = function(e) {
+    message("")
+  })
+  circos.clear()
+}
+dev.off()
+
+
+```
+
+```{r TCR circos plots dynamic}
+fn_circos <- function(df, plot_title = NULL, time1 = NULL, time2 = NULL, order = NULL){
+  df %>% 
+    getCirclize(cloneCall = "CTaa",
+                method = "unique", 
+                group.by = c("timepoint_Cluster"),
+                proportion = TRUE) %>% 
+  filter(str_detect(from, paste0("^", time1)), str_detect(to,paste0("^", time2))) %>% 
+  mutate(value = ifelse(value < 0.005, 0, value)) %>% 
+
+  chordDiagram(grid.col = cols,
+               link.border = "black", 
+               transparency = 0.3, 
+               order = order,
+               annotationTrack = "grid", 
+               preAllocateTracks = list(track.height = 0.35))
+    
+  circos.trackPlotRegion(
+    track.index = 1,
+    panel.fun = function(x, y) {
+    sector.name = CELL_META$sector.index
+    xlim = CELL_META$xlim
+
+    circos.text(
+      mean(xlim),
+      CELL_META$ylim[1],
+      sector.name,
+      facing = "clockwise",
+      niceFacing = TRUE,
+      adj = c(0, 0.5),
+      cex = 0.70
+    )
+  },
+  bg.border = NA
+)
+  # Donor title
+  if (!is.null(plot_title)) {
+    title(plot_title, cex.main = 1.5, font.main = 2)
+  }
+}
+
+donor <- seurat_T_TCR_d0[["donor"]]$donor %>% unique() %>% sort()
+donor_title <- c("WVA03", "WVA04", "WVA05", "WVA6", "WVA07", "WVA08", "WVA09", "WVA10")
+
+seurat_T_TCR <- seurat_T_TCR %>% subset(subset = group == "Allergic")
+
+cols <- rep(brewer.pal(10, "Set3"),2)
+seurat_T_TCR[["timepoint_Cluster"]] <- paste0(seurat_T_TCR$timepoint, " ", seurat_T_TCR$clusters_names)
+
+#For do to d7
+order2 <- seurat_T_TCR[["timepoint_Cluster"]]$timepoint_Cluster %>% unique() %>% sort()
+order2 <- order2[c(10, 9, 8, 4, 7, 6, 5, 3, 2, 1,
+        20, 19, 18, 14, 17, 16, 15, 13,12,11)]
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot_d0_d7.svg"), width = 5, height = 5)
+seurat_T_TCR %>% fn_circos(time1="d0", time2="d7", order=order2)
+dev.off()
+
+#Donor separated in loop
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot_d0_d7_separatedDonor.svg"), 
+        width = 15, height = 8)
+par(mfrow = c(2, 4))
+for(i in 1:length(donor)){
+  donor_sub <- donor[i]
+  title <- donor_title[i]
+  df <- seurat_T_TCR %>% subset(subset = donor == donor_sub)
+  tryCatch({    
+  df %>% fn_circos(plot_title=title, time1="d0", time2="d7", order=order2)
+  }, error = function(e) {
+      message("")
+  })
+  circos.clear()
+}
+dev.off()
+
+
+
+#For do to mo6
+order2 <- seurat_T_TCR[["timepoint_Cluster"]]$timepoint_Cluster %>% unique() %>% sort()
+order2 <- order2[c(10, 9, 8, 4, 7, 6, 5, 3, 2, 1,
+        30, 29, 28, 24, 27, 26, 25, 23,22,21)]
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot_d0_mo6.svg"), width = 5, height = 5)
+seurat_T_TCR %>% fn_circos(time1="d0", time2="mo6", order=order2)
+dev.off()
+
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot_d0_mo6_separatedDonor.svg"), 
+        width = 15, height = 8)
+par(mfrow = c(2, 4))
+for(i in 1:length(donor)){
+  donor_sub <- donor[i]
+  title <- donor_title[i]
+  df <- seurat_T_TCR %>% subset(subset = donor == donor_sub)
+  tryCatch({    
+  df %>% fn_circos(plot_title=title, time1="d0", time2="mo6", order=order2)
+  }, error = function(e) {
+      message("")
+  })
+  circos.clear()
+}
+dev.off()
+
+
+#For d7 to mo6
+order2 <- seurat_T_TCR[["timepoint_Cluster"]]$timepoint_Cluster %>% unique() %>% sort()
+order2 <- order2[c(20, 19, 18, 14, 17, 16, 15, 13, 12, 11,
+        30, 29, 28, 24, 27, 26, 25, 23,22,21)]
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot_d7_mo6.svg"), width = 5, height = 5)
+seurat_T_TCR %>% fn_circos(time1="d7", time2="mo6", order=order2)
+dev.off()
+
+
+svglite(paste0(filepath_plots, "T_Clusters_Clonality_circleplot_d7_mo6_separatedDonor.svg"), 
+        width = 15, height = 8)
+par(mfrow = c(2, 4))
+for(i in 1:length(donor)){
+  donor_sub <- donor[i]
+  title <- donor_title[i]
+  df <- seurat_T_TCR %>% subset(subset = donor == donor_sub)
+  tryCatch({    
+  df %>% fn_circos(plot_title=title, time1="d7", time2="mo6", order=order2)
+  }, error = function(e) {
+      message("")
+  })
+  circos.clear()
+}
+dev.off()
+
+```
+
+```{r TCR uses StartracDiversity with scRepertoire}
+cols <- brewer.pal(10, "Set3")
+
+sc_TCR <- seurat_T_TCR %>% 
+  subset(subset = timepoint %in% c("d0", "d7", "mo6")) %>% 
+  subset(subset =!is.na(CTaa))
+
+#All scores
+p <- sc_TCR %>%  
+  StartracDiversity(cloneCall = "CTaa", type = "timepoint", group.by = "donor", export.table = T, index=c("expa", "tran")) %>% 
+  mutate(clusters_names = recode(cluster, !!!names),
+         clusters_names = factor(clusters_names, levels = unlist(names))) %>% 
+  pivot_longer(cols = c(expa:tran), names_to = "names", values_to = "Values") %>% 
+  mutate(names = recode(names, "expa" = "Expansion", "tran" = "Transition")) %>% 
+  ggplot(aes(x=clusters_names, y=Values, fill=clusters_names))+
+  facet_grid(rows=vars(names), scales = "free") +
+    geom_violin(scale = "width", width =0.75)+ 
+    geom_boxplot(width = .25) +
+    geom_point(size=1, alpha=.5) +
+    labs(x=NULL, y="STARTRAC scores") +
+    scale_fill_manual(values = cols) + scale_colour_manual(values = cols) +
+    theme_pubr() + theme_fonts + theme_grid + theme_x_angled +
+    theme(legend.position = "none")
+
+svglite(paste0(filepath_plots, "T_Clusters_StarTrac_all.svg"), width = 14, height = 6)
+p
+dev.off()
+
+#####
+#Expansion
+p <- sc_TCR %>%  
+  StartracDiversity(cloneCall = "CTaa", index = "expa", type = "timepoint", group.by = "donor", export.table = TRUE) %>% 
+  mutate(clusters_names = recode(cluster, !!!names),
+         clusters_names = factor(clusters_names, levels = unlist(names))) %>% 
+  ggplot(aes(x=clusters_names, y=expa, fill=clusters_names))+
+    geom_violin(scale = "width", width =0.75)+ 
+    geom_boxplot(width = .25) +
+    geom_point(size=1, alpha=.5) +
+    labs(x=NULL, y="STARTRAC Expansion") +
+    # scale_y_continuous(limits = c(.65 ,NA)) +
+    scale_fill_manual(values = cols) + scale_colour_manual(values = cols) +
+    theme_pubr() + theme_fonts + theme_grid + theme_x_angled +
+    theme(legend.position = "none")
+    
+svglite(paste0(filepath_plots, "T_Clusters_Expansion.svg"), width = 4.5, height = 5)
+p
+dev.off()
+
+
+#####
+#Migration
+p <- sc_TCR %>%  
+  StartracDiversity(cloneCall = "CTaa", index = "migr", type = "timepoint", group.by = "donor", export.table = TRUE) %>% 
+  mutate(clusters_names = recode(cluster, !!!names),
+         clusters_names = factor(clusters_names, levels = unlist(names))) %>% 
+  ggplot(aes(x=clusters_names, y=migr, fill=clusters_names))+
+    geom_violin(scale = "width", width =0.75)+ 
+    geom_boxplot(width = .25) +
+    geom_point(size=1, alpha=.5) +
+    labs(x=NULL, y="STARTRAC Migration") +
+    # scale_y_continuous(limits = c(.65 ,NA)) +
+    scale_fill_manual(values = cols) + scale_colour_manual(values = cols) +
+    theme_pubr() + theme_fonts + theme_grid + theme_x_angled +
+    theme(legend.position = "none")
+    
+svglite(paste0(filepath_plots, "T_Clusters_Migration.svg"), width = 4.5, height = 5)
+p
+dev.off()
+
+
+```
+
